@@ -18,6 +18,18 @@ Implemented:
   - UTC as the offline UT1 proxy for sidereal/Earth-rotation terms.
 - GitHub Actions workflow to build and upload a debug APK.
 
+## Build stack
+
+The GitHub Actions workflow uses a conservative Android build stack for CI reliability:
+
+- Android Gradle Plugin 8.7.3.
+- Gradle 8.9.
+- Android SDK platform 35.
+- Android SDK Build Tools 34.0.0.
+- JDK 17.
+
+The source code does not require API 36/37-specific behavior, so compile/target SDK 35 is sufficient for this testing APK and avoids depending on the newest SDK packages being available in the CI runner.
+
 ## Deliberately not implemented
 
 - No browser-view wrapper.
