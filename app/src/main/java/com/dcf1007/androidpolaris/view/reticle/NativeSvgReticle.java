@@ -5,7 +5,6 @@ import android.graphics.Color;
 import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.util.PathParser;
 
 import com.dcf1007.androidpolaris.astro.PolarisAlignmentCalculator;
 import com.dcf1007.androidpolaris.model.AlignmentResult;
@@ -14,6 +13,8 @@ import com.dcf1007.androidpolaris.util.UiFormatting;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Small native object model for the supplied SVG reticle.
@@ -196,7 +197,7 @@ public final class NativeSvgReticle {
 
         SvgPath(String id, String pathData, int fillColor, int strokeColor, float strokeWidth, float[] dashPattern) {
             super(id);
-            this.path = PathParser.createPathFromPathData(pathData);
+            this.path = createPathFromSvgPathData(pathData);
             this.fillColor = fillColor;
             this.strokeColor = strokeColor;
             this.strokeWidth = strokeWidth;
@@ -293,5 +294,101 @@ public final class NativeSvgReticle {
             // The 0h indicator and time scale stay fixed, matching the sanitized HTML behavior.
             return 0.0f;
         }
+    }
+
+    /**
+     * Parses the small SVG path subset used by the native reticle arrows.
+     *
+     * <p>This avoids android.util.PathParser, which is not available as a public API in all build
+     * environments. The parser intentionally supports the commands currently used by the reticle
+     * geometry: M/m, L/l, H/h, V/v and Z/z. It also handles compact SVG number syntax such as
+     * "l-15-28.97", where signs delimit consecutive values.</p>
+     */
+    private static Path createPathFromSvgPathData(String pathData) {
+        Path path = new Path();
+        if (pathData == null || pathData.trim().isEmpty()) return path;
+
+        List<String> tokens = tokenizeSvgPathData(pathData);
+        int index = 0;
+        char command = 0;
+        float currentX = 0.0f;
+        float currentY = 0.0f;
+        float subPathStartX = 0.0f;
+        float subPathStartY = 0.0f;
+
+        while (index < tokens.size()) {
+            String token = tokens.get(index);
+            if (isSvgPathCommandToken(token)) {
+                command = token.charAt(0);
+                index++;
+            } else if (command == 0) {
+                throw new IllegalArgumentException("SVG path data starts without a command: " + pathData);
+            }
+
+            switch (command) {
+                case 'M':
+                case 'm': {
+                    boolean relative = command == 'm';
+                    currentX = relative ? currentX + parseFloat(tokens.get(index++)) : parseFloat(tokens.get(index++));
+                    currentY = relative ? currentY + parseFloat(tokens.get(index++)) : parseFloat(tokens.get(index++));
+                    path.moveTo(currentX, currentY);
+                    subPathStartX = currentX;
+                    subPathStartY = currentY;
+                    command = relative ? 'l' : 'L';
+                    break;
+                }
+                case 'L':
+                case 'l': {
+                    boolean relative = command == 'l';
+                    currentX = relative ? currentX + parseFloat(tokens.get(index++)) : parseFloat(tokens.get(index++));
+                    currentY = relative ? currentY + parseFloat(tokens.get(index++)) : parseFloat(tokens.get(index++));
+                    path.lineTo(currentX, currentY);
+                    break;
+                }
+                case 'H':
+                case 'h': {
+                    boolean relative = command == 'h';
+                    currentX = relative ? currentX + parseFloat(tokens.get(index++)) : parseFloat(tokens.get(index++));
+                    path.lineTo(currentX, currentY);
+                    break;
+                }
+                case 'V':
+                case 'v': {
+                    boolean relative = command == 'v';
+                    currentY = relative ? currentY + parseFloat(tokens.get(index++)) : parseFloat(tokens.get(index++));
+                    path.lineTo(currentX, currentY);
+                    break;
+                }
+                case 'Z':
+                case 'z': {
+                    path.close();
+                    currentX = subPathStartX;
+                    currentY = subPathStartY;
+                    command = 0;
+                    break;
+                }
+                default:
+                    throw new IllegalArgumentException("Unsupported SVG path command '" + command + "' in: " + pathData);
+            }
+        }
+        return path;
+    }
+
+    private static List<String> tokenizeSvgPathData(String pathData) {
+        List<String> tokens = new ArrayList<>();
+        Pattern tokenPattern = Pattern.compile("[MmLlHhVvZz]|[-+]?(?:\\d*\\.\\d+|\\d+\\.?)(?:[eE][-+]?\\d+)?");
+        Matcher matcher = tokenPattern.matcher(pathData);
+        while (matcher.find()) {
+            tokens.add(matcher.group());
+        }
+        return tokens;
+    }
+
+    private static boolean isSvgPathCommandToken(String token) {
+        return token != null && token.length() == 1 && "MmLlHhVvZz".indexOf(token.charAt(0)) >= 0;
+    }
+
+    private static float parseFloat(String token) {
+        return Float.parseFloat(token);
     }
 }
