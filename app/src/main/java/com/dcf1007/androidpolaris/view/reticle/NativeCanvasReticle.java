@@ -150,8 +150,8 @@ public final class NativeCanvasReticle {
             if ("polaris_x5F_indicator".equals(context.currentGroupId) && context.result != null) {
                 canvas.drawLine((float) PolarisAlignmentCalculator.RETICLE_CENTER_X,
                         (float) PolarisAlignmentCalculator.RETICLE_CENTER_Y,
-                        (float) context.result.markerSvgX,
-                        (float) context.result.markerSvgY,
+                        (float) context.result.markerReticleX,
+                        (float) context.result.markerReticleY,
                         context.strokePaint);
             } else {
                 canvas.drawLine(x1, y1, x2, y2, context.strokePaint);
@@ -186,8 +186,8 @@ public final class NativeCanvasReticle {
 
             // The Polaris dot keeps the original element id, but moves to the calculated target.
             if ("polaris_x5F_position".equals(id) && context.result != null) {
-                drawCx = (float) context.result.markerSvgX;
-                drawCy = (float) context.result.markerSvgY;
+                drawCx = (float) context.result.markerReticleX;
+                drawCy = (float) context.result.markerReticleY;
             }
 
             if (fillColor != Color.TRANSPARENT) {
