@@ -1,15 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- AUSBC/UVCCamera checks CAMERA permission on modern Android before opening
+         the native USB-camera preview, even though no built-in Camera2 camera is used. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- Camera2 starts at API 21. USB host starts at API 12, but it is optional
-         on Android hardware, so required=false keeps the app installable on phones
-         that do not expose USB host mode. The app reports missing USB host support
-         in the UI rather than failing installation. -->
-    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <!-- The app is designed for USB OTG / UVC cameras. Keep required=false so the
+         APK remains installable while the UI can report missing USB-host support. -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
@@ -26,10 +25,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Generic UVC/USB-video attach handling. This does not replace Camera2;
-                 it lets the app detect OTG cameras and request Android USB permission.
-                 Many Android devices expose UVC cameras to apps only through Camera2
-                 if the vendor's external-camera HAL supports that camera. -->
+            <!-- Launch the app when a USB camera is attached. The UVC backend then
+                 requests Android USB permission and opens preview through libuvc. -->
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
