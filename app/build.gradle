@@ -10,8 +10,8 @@ android {
         applicationId 'com.dcf1007.androidpolaris'
         minSdk 23
         targetSdk 33
-        versionCode 9
-        versionName '0.2.7'
+        versionCode 10
+        versionName '0.2.8'
     }
 
     compileOptions {
@@ -21,7 +21,6 @@ android {
 }
 
 dependencies {
-    implementation "com.caverock:androidsvg-aar:1.4"
     implementation("com.github.jiangdongguo.AndroidUSBCamera:libausbc:3.2.7") {
         exclude group: "com.gyf.immersionbar", module: "immersionbar"
         exclude group: "com.zlc.glide", module: "webpdecoder"
