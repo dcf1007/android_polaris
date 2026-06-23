@@ -5,6 +5,7 @@ import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
 import android.view.TextureView;
+import android.widget.FrameLayout;
 
 import com.jiangdg.ausbc.MultiCameraClient;
 import com.jiangdg.ausbc.camera.bean.CameraRequest;
@@ -22,19 +23,25 @@ import java.util.Map;
 /**
  * USB OTG / UVC-only preview controller.
  *
- * <p>This class intentionally contains no Camera2 code. The target hardware path is:</p>
+ * <p>This class is the only active code path that touches AUSBC/libuvc. MainActivity creates it
+ * lazily only after the user presses the USB-camera button. That design is intentional: if the
+ * third-party UVC backend fails on a particular Android build, the app can still launch, display
+ * diagnostics, and run the Polaris calculation instead of closing immediately.</p>
+ *
+ * <p>Target flow:</p>
  *
  * <pre>
- * USB OTG camera -> Android USB Host permission -> AUSBC/libuvc backend -> TextureView preview
+ * USB OTG UVC camera
+ *   -> Android USB Host enumeration
+ *   -> Android USB permission request
+ *   -> AUSBC/libuvc native camera backend
+ *   -> AspectRatioTextureView preview
+ *   -> native Android reticle overlay drawn by MainActivity
  * </pre>
  *
- * <p>The controller owns only the USB/UVC lifecycle. MainActivity owns Android runtime
- * permissions and the UI. The astronomy/reticle overlay remains independent of the camera backend.</p>
- *
- * <p>The code is written against the pinned AUSBC 3.2.7 API. That release exposes UVC
- * camera instances as {@link MultiCameraClient.Camera}, uses Serenegiant's
- * {@link USBMonitor.UsbControlBlock} type, and supports a compact {@link CameraRequest}
- * with preview size and AF/AE settings.</p>
+ * <p>The code is written against the pinned AUSBC 3.2.7 API. That release exposes UVC camera
+ * instances as {@link MultiCameraClient.Camera}, uses Serenegiant's
+ * {@link USBMonitor.UsbControlBlock} type, and supports a compact {@link CameraRequest} builder.</p>
  */
 public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
@@ -47,6 +54,7 @@ public final class UvcPreviewController {
     }
 
     private final Context context;
+    private final FrameLayout previewContainer;
     private final AspectRatioTextureView previewView;
     private final Listener listener;
     private final MultiCameraClient uvcClient;
@@ -59,23 +67,45 @@ public final class UvcPreviewController {
     private UsbDevice pendingOpenDevice;
     private MultiCameraClient.Camera activeUvcCamera;
 
-    public UvcPreviewController(Context context, AspectRatioTextureView previewView, Listener listener) {
+    public UvcPreviewController(Context context, FrameLayout previewContainer, Listener listener) {
         this.context = context;
-        this.previewView = previewView;
+        this.previewContainer = previewContainer;
         this.listener = listener;
+
+        // This view is part of AUSBC. It is created only after the user asks to open UVC preview,
+        // never during app startup. Keeping it here avoids loading AUSBC from MainActivity.onCreate().
+        this.previewView = new AspectRatioTextureView(context);
+        this.previewContainer.removeAllViews();
+        this.previewContainer.addView(previewView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
         this.uvcClient = new MultiCameraClient(context, createDeviceConnectionCallback());
         configurePreviewSurfaceCallbacks();
     }
 
-    /** Starts listening for USB attach/detach events. Safe to call repeatedly. */
-    public void register() {
+    /**
+     * Starts listening for USB attach/detach events.
+     *
+     * <p>All AUSBC calls are guarded. If an Android-version/library mismatch occurs, report it to
+     * the UI instead of letting the exception terminate the Activity.</p>
+     */
+    public boolean register() {
         if (isUsbMonitorRegistered) {
-            return;
+            return true;
         }
-        uvcClient.register();
-        isUsbMonitorRegistered = true;
-        notifyStatus("UVC monitor registered. Connect the USB OTG camera, then tap Open USB UVC camera.");
-        refreshDetectedDeviceCacheFromUsbHost();
+        try {
+            uvcClient.register();
+            isUsbMonitorRegistered = true;
+            refreshDetectedDeviceCacheFromUsbHost();
+            notifyStatus("UVC monitor registered. Connect the USB OTG camera, then tap Open USB UVC camera if permission is not requested automatically.");
+            return true;
+        } catch (Throwable throwable) {
+            isUsbMonitorRegistered = false;
+            notifyStatus("UVC monitor registration failed: " + describeThrowable(throwable));
+            return false;
+        }
     }
 
     /** Stops listening for USB events and closes the active preview if needed. */
@@ -84,9 +114,13 @@ public final class UvcPreviewController {
         if (!isUsbMonitorRegistered) {
             return;
         }
-        uvcClient.unRegister();
-        isUsbMonitorRegistered = false;
-        notifyStatus("UVC monitor unregistered.");
+        try {
+            uvcClient.unRegister();
+        } catch (Throwable throwable) {
+            notifyStatus("UVC monitor unregister warning: " + describeThrowable(throwable));
+        } finally {
+            isUsbMonitorRegistered = false;
+        }
     }
 
     /** Releases the AUSBC USB monitor. Call from Activity.onDestroy(). */
@@ -94,7 +128,12 @@ public final class UvcPreviewController {
         closeActiveCamera();
         uvcCamerasByDeviceId.clear();
         detectedUvcDevicesById.clear();
-        uvcClient.destroy();
+        try {
+            uvcClient.destroy();
+        } catch (Throwable throwable) {
+            notifyStatus("UVC destroy warning: " + describeThrowable(throwable));
+        }
+        previewContainer.removeAllViews();
     }
 
     /**
@@ -104,8 +143,8 @@ public final class UvcPreviewController {
      * {@code onConnectDev()}, where the preview is opened.</p>
      */
     public void requestPermissionAndOpenFirstCamera() {
-        if (!isUsbMonitorRegistered) {
-            register();
+        if (!register()) {
+            return;
         }
 
         refreshDetectedDeviceCacheFromUsbHost();
@@ -117,9 +156,13 @@ public final class UvcPreviewController {
 
         pendingOpenDevice = firstDevice;
         notifyStatus("Requesting USB permission for " + describeDeviceBrief(firstDevice) + "…");
-        boolean requestStarted = uvcClient.requestPermission(firstDevice);
-        if (!requestStarted) {
-            notifyStatus("USB permission request could not start. Reconnect the camera and try again.");
+        try {
+            boolean requestStarted = uvcClient.requestPermission(firstDevice);
+            if (!requestStarted) {
+                notifyStatus("USB permission request could not start. Reconnect the camera and try again.");
+            }
+        } catch (Throwable throwable) {
+            notifyStatus("USB permission request failed: " + describeThrowable(throwable));
         }
     }
 
@@ -144,8 +187,8 @@ public final class UvcPreviewController {
         if (activeUvcCamera != null) {
             try {
                 activeUvcCamera.closeCamera();
-            } catch (RuntimeException exception) {
-                notifyStatus("UVC close warning: " + exception.getMessage());
+            } catch (Throwable throwable) {
+                notifyStatus("UVC close warning: " + describeThrowable(throwable));
             }
             activeUvcCamera = null;
         }
@@ -170,7 +213,11 @@ public final class UvcPreviewController {
                 detectedUvcDevicesById.remove(device.getDeviceId());
                 MultiCameraClient.Camera removedCamera = uvcCamerasByDeviceId.remove(device.getDeviceId());
                 if (removedCamera != null) {
-                    removedCamera.closeCamera();
+                    try {
+                        removedCamera.closeCamera();
+                    } catch (Throwable throwable) {
+                        notifyStatus("UVC detach close warning: " + describeThrowable(throwable));
+                    }
                 }
                 if (pendingOpenDevice != null && pendingOpenDevice.getDeviceId() == device.getDeviceId()) {
                     pendingOpenDevice = null;
@@ -186,13 +233,17 @@ public final class UvcPreviewController {
                 if (!isUvcVideoDevice(device) || controlBlock == null) {
                     return;
                 }
-                rememberDetectedDevice(device);
-                pendingOpenDevice = device;
-                MultiCameraClient.Camera camera = getOrCreateUvcCamera(device);
-                camera.setUsbControlBlock(controlBlock);
-                camera.setCameraStateCallBack(createCameraStateCallback());
-                activeUvcCamera = camera;
-                openCameraWhenPreviewSurfaceIsReady(camera, device);
+                try {
+                    rememberDetectedDevice(device);
+                    pendingOpenDevice = device;
+                    MultiCameraClient.Camera camera = getOrCreateUvcCamera(device);
+                    camera.setUsbControlBlock(controlBlock);
+                    camera.setCameraStateCallBack(createCameraStateCallback());
+                    activeUvcCamera = camera;
+                    openCameraWhenPreviewSurfaceIsReady(camera, device);
+                } catch (Throwable throwable) {
+                    notifyStatus("UVC connect handling failed: " + describeThrowable(throwable));
+                }
             }
 
             @Override
@@ -237,7 +288,7 @@ public final class UvcPreviewController {
 
             @Override
             public void onSurfaceTextureSizeChanged(SurfaceTexture surfaceTexture, int width, int height) {
-                // AUSBC handles the actual UVC stream. The overlay is resized independently by Android layout.
+                // AUSBC handles the stream surface. The reticle overlay is resized independently.
             }
 
             @Override
@@ -263,17 +314,12 @@ public final class UvcPreviewController {
         try {
             camera.openCamera(previewView, createPreviewRequest());
             notifyStatus("Opening UVC preview for " + describeDeviceBrief(device) + "…");
-        } catch (RuntimeException exception) {
-            notifyStatus("Failed to open UVC preview: " + exception.getMessage());
+        } catch (Throwable throwable) {
+            notifyStatus("Failed to open UVC preview: " + describeThrowable(throwable));
         }
     }
 
-    /**
-     * Creates the minimal AUSBC 3.2.7 request needed for preview.
-     *
-     * <p>Newer AUSBC versions expose render/audio/format options on this builder. Version 3.2.7
-     * does not, so the native backend internally tries MJPEG and falls back to YUYV where needed.</p>
-     */
+    /** Creates the minimal AUSBC 3.2.7 request needed for preview. */
     private CameraRequest createPreviewRequest() {
         return new CameraRequest.Builder()
                 .setPreviewWidth(DEFAULT_PREVIEW_WIDTH)
@@ -294,15 +340,20 @@ public final class UvcPreviewController {
     }
 
     private void refreshDetectedDeviceCacheFromUsbHost() {
-        List<UsbDevice> devices = getUvcDevicesFromClient();
-        for (UsbDevice device : devices) {
+        for (UsbDevice device : getUvcDevicesFromClientSafely()) {
             rememberDetectedDevice(device);
         }
     }
 
-    private List<UsbDevice> getUvcDevicesFromClient() {
+    private List<UsbDevice> getUvcDevicesFromClientSafely() {
         List<UsbDevice> filteredDevices = new ArrayList<>();
-        List<UsbDevice> allUsbDevices = uvcClient.getDeviceList(null);
+        List<UsbDevice> allUsbDevices;
+        try {
+            allUsbDevices = uvcClient.getDeviceList(null);
+        } catch (Throwable throwable) {
+            notifyStatus("USB device scan failed: " + describeThrowable(throwable));
+            return filteredDevices;
+        }
         if (allUsbDevices == null) {
             return filteredDevices;
         }
@@ -315,10 +366,9 @@ public final class UvcPreviewController {
     }
 
     private void rememberDetectedDevice(UsbDevice device) {
-        if (device == null) {
-            return;
+        if (device != null) {
+            detectedUvcDevicesById.put(device.getDeviceId(), device);
         }
-        detectedUvcDevicesById.put(device.getDeviceId(), device);
     }
 
     private UsbDevice getFirstDetectedUvcDevice() {
@@ -355,6 +405,14 @@ public final class UvcPreviewController {
                 device.getProductId(),
                 device.getInterfaceCount(),
                 device.getDeviceName());
+    }
+
+    private String describeThrowable(Throwable throwable) {
+        String message = throwable.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            message = "no detail message";
+        }
+        return throwable.getClass().getSimpleName() + ": " + message;
     }
 
     private void notifyStatus(String statusText) {
