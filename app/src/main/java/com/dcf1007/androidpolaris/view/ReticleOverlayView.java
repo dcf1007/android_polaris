@@ -9,23 +9,23 @@ import android.view.View;
 
 import com.dcf1007.androidpolaris.astro.PolarisAlignmentCalculator;
 import com.dcf1007.androidpolaris.model.AlignmentResult;
+import com.dcf1007.androidpolaris.view.reticle.NativeCanvasReticle;
 import com.dcf1007.androidpolaris.view.reticle.NativeReticleGeometry;
-import com.dcf1007.androidpolaris.view.reticle.NativeSvgReticle;
 
 /**
  * Native reticle overlay drawn above the UVC video preview.
  *
- * <p>The original SVG is represented by {@link NativeSvgReticle.Group} and child native Canvas
- * primitives. The object tree keeps the original SVG group ids, drawing order, coordinates, colours,
- * stroke widths and text labels. Dynamic groups are transformed at draw time using the current
- * {@link AlignmentResult}; no SVG renderer, WebView or CSV intermediate is used.</p>
+ * <p>The reticle is a Java object tree of Android Canvas primitives. It preserves the source
+ * hierarchy, drawing order, coordinates, colors, stroke widths and text labels, but no vector asset,
+ * parser or WebView is present at runtime. Dynamic groups are transformed using the current
+ * {@link AlignmentResult}.</p>
  */
 public final class ReticleOverlayView extends View {
-    private static final RectF SVG_VIEWPORT = new RectF(0.0f, 0.0f,
+    private static final RectF RETICLE_VIEWPORT = new RectF(0.0f, 0.0f,
             (float) PolarisAlignmentCalculator.SVG_VIEWBOX_WIDTH,
             (float) PolarisAlignmentCalculator.SVG_VIEWBOX_HEIGHT);
 
-    private final NativeSvgReticle.Group reticleRoot = NativeReticleGeometry.createReticle();
+    private final NativeCanvasReticle.Group reticleRoot = NativeReticleGeometry.createReticle();
     private AlignmentResult alignmentResult;
 
     public ReticleOverlayView(Context context) {
@@ -61,20 +61,20 @@ public final class ReticleOverlayView extends View {
         canvas.save();
         canvas.translate(transform.offsetX, transform.offsetY);
         canvas.scale(transform.scale, transform.scale);
-        reticleRoot.draw(canvas, new NativeSvgReticle.RenderContext(alignmentResult));
+        reticleRoot.draw(canvas, new NativeCanvasReticle.RenderContext(alignmentResult));
         canvas.restore();
     }
 
     /**
-     * Fit the original SVG viewBox inside this Android view without stretching it.
+     * Fit the original coordinate space inside this Android view without stretching.
      *
-     * <p>This preserves the source reticle proportions and keeps the overlay geometrically aligned
-     * with the camera preview instead of forcing a different aspect ratio.</p>
+     * <p>This preserves reticle proportions and keeps the overlay geometrically aligned with the
+     * camera preview instead of forcing a different aspect ratio.</p>
      */
     private ViewportTransform computeViewportTransform() {
-        float scale = (float) Math.min(getWidth() / SVG_VIEWPORT.width(), getHeight() / SVG_VIEWPORT.height());
-        float usedWidth = SVG_VIEWPORT.width() * scale;
-        float usedHeight = SVG_VIEWPORT.height() * scale;
+        float scale = (float) Math.min(getWidth() / RETICLE_VIEWPORT.width(), getHeight() / RETICLE_VIEWPORT.height());
+        float usedWidth = RETICLE_VIEWPORT.width() * scale;
+        float usedHeight = RETICLE_VIEWPORT.height() * scale;
         return new ViewportTransform(scale, (getWidth() - usedWidth) / 2.0f, (getHeight() - usedHeight) / 2.0f);
     }
 
