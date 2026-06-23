@@ -5,6 +5,7 @@ import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
 import android.view.TextureView;
+import android.view.View;
 import android.widget.FrameLayout;
 
 import com.jiangdg.ausbc.MultiCameraClient;
@@ -47,6 +48,7 @@ public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
     private static final int DEFAULT_PREVIEW_WIDTH = 1280;
     private static final int DEFAULT_PREVIEW_HEIGHT = 720;
+    private static final long SURFACE_RECHECK_DELAY_MS = 250L;
 
     /** Receives status messages that should be displayed in the Activity. */
     public interface Listener {
@@ -64,6 +66,7 @@ public final class UvcPreviewController {
 
     private boolean isUsbMonitorRegistered;
     private boolean isPreviewSurfaceAvailable;
+    private boolean isOpenAttemptScheduled;
     private UsbDevice pendingOpenDevice;
     private MultiCameraClient.Camera activeUvcCamera;
 
@@ -75,14 +78,23 @@ public final class UvcPreviewController {
         // This view is part of AUSBC. It is created only after the user asks to open UVC preview,
         // never during app startup. Keeping it here avoids loading AUSBC from MainActivity.onCreate().
         this.previewView = new AspectRatioTextureView(context);
+        configurePreviewSurfaceCallbacks();
+
         this.previewContainer.removeAllViews();
         this.previewContainer.addView(previewView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
+        this.previewContainer.setVisibility(View.VISIBLE);
+        this.previewContainer.requestLayout();
+        this.previewView.requestLayout();
 
         this.uvcClient = new MultiCameraClient(context, createDeviceConnectionCallback());
-        configurePreviewSurfaceCallbacks();
+
+        // If the TextureView surface becomes available between construction and the first camera
+        // connection callback, the listener will not necessarily be called again. Re-check after
+        // the view has gone through layout so the open path cannot stall forever on a stale flag.
+        scheduleSurfaceAvailabilityRecheck("initial preview view attach");
     }
 
     /**
@@ -192,6 +204,7 @@ public final class UvcPreviewController {
             }
             activeUvcCamera = null;
         }
+        isOpenAttemptScheduled = false;
     }
 
     private IDeviceConnectCallBack createDeviceConnectionCallback() {
@@ -281,6 +294,7 @@ public final class UvcPreviewController {
             @Override
             public void onSurfaceTextureAvailable(SurfaceTexture surfaceTexture, int width, int height) {
                 isPreviewSurfaceAvailable = true;
+                notifyStatus("Preview surface ready: " + width + "×" + height + ".");
                 if (activeUvcCamera != null && pendingOpenDevice != null) {
                     openCameraWhenPreviewSurfaceIsReady(activeUvcCamera, pendingOpenDevice);
                 }
@@ -306,8 +320,12 @@ public final class UvcPreviewController {
     }
 
     private void openCameraWhenPreviewSurfaceIsReady(MultiCameraClient.Camera camera, UsbDevice device) {
+        refreshPreviewSurfaceAvailability();
         if (!isPreviewSurfaceAvailable) {
-            notifyStatus("UVC permission granted for " + describeDeviceBrief(device) + ", waiting for preview surface…");
+            notifyStatus("UVC permission granted for " + describeDeviceBrief(device)
+                    + ", waiting for preview surface. Current preview view size: "
+                    + previewView.getWidth() + "×" + previewView.getHeight() + ".");
+            scheduleOpenAttemptAfterSurfaceRecheck(camera, device);
             return;
         }
 
@@ -317,6 +335,46 @@ public final class UvcPreviewController {
         } catch (Throwable throwable) {
             notifyStatus("Failed to open UVC preview: " + describeThrowable(throwable));
         }
+    }
+
+    private void refreshPreviewSurfaceAvailability() {
+        isPreviewSurfaceAvailable = previewView.isAvailable();
+    }
+
+    private void scheduleSurfaceAvailabilityRecheck(String reason) {
+        previewView.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                refreshPreviewSurfaceAvailability();
+                if (isPreviewSurfaceAvailable) {
+                    notifyStatus("Preview surface ready after " + reason + ".");
+                    if (activeUvcCamera != null && pendingOpenDevice != null) {
+                        openCameraWhenPreviewSurfaceIsReady(activeUvcCamera, pendingOpenDevice);
+                    }
+                }
+            }
+        }, SURFACE_RECHECK_DELAY_MS);
+    }
+
+    private void scheduleOpenAttemptAfterSurfaceRecheck(MultiCameraClient.Camera camera, UsbDevice device) {
+        if (isOpenAttemptScheduled) {
+            return;
+        }
+        isOpenAttemptScheduled = true;
+        previewView.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                isOpenAttemptScheduled = false;
+                refreshPreviewSurfaceAvailability();
+                if (isPreviewSurfaceAvailable) {
+                    openCameraWhenPreviewSurfaceIsReady(camera, device);
+                } else {
+                    notifyStatus("Preview surface still unavailable. Preview view size: "
+                            + previewView.getWidth() + "×" + previewView.getHeight()
+                            + ". The preview panel must be visible before UVC video can start.");
+                }
+            }
+        }, SURFACE_RECHECK_DELAY_MS);
     }
 
     /** Creates the minimal AUSBC 3.2.7 request needed for preview. */
