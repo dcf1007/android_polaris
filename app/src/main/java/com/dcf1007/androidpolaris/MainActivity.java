@@ -3,7 +3,6 @@ package com.dcf1007.androidpolaris;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
@@ -13,7 +12,6 @@ import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.Settings;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
@@ -46,24 +44,16 @@ import java.util.Locale;
 /**
  * Main single-activity Android app.
  *
- * <p>The launch path is deliberately kept free of AUSBC/libuvc initialization. The app starts
- * using Android framework classes, draws the SVG reticle overlay, and performs the Polaris
- * calculation before any USB camera backend is touched. The UVC backend is created lazily only
- * after the user presses "Open USB UVC camera".</p>
- *
- * <p>The camera path is USB OTG / UVC only. Camera2 and built-in phone-camera workflows are
- * intentionally absent.</p>
+ * <p>The app starts with Android framework classes only, draws the native reticle overlay, and
+ * calculates Polaris before the USB camera backend is touched. The UVC backend is created lazily
+ * after the user presses Open USB UVC camera.</p>
  */
 public final class MainActivity extends Activity {
     private static final int REQUEST_CAMERA_PERMISSION_FOR_UVC = 1001;
     private static final int REQUEST_LOCATION_PERMISSION = 1002;
     private static final int USB_VIDEO_CLASS = 14;
     private static final int PREVIEW_PANEL_MIN_HEIGHT_DP = 260;
-
-    private static final String[] MONTH_NAMES = {
-            "January", "February", "March", "April", "May", "June",
-            "July", "August", "September", "October", "November", "December"
-    };
+    private static final String[] MONTH_NAMES = {"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
     private static final int[] MONTH_DAYS = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
     private final Handler liveClockHandler = new Handler(Looper.getMainLooper());
@@ -92,8 +82,7 @@ public final class MainActivity extends Activity {
     private boolean isBuildingOrInitializingUi;
 
     private final Runnable liveClockRunnable = new Runnable() {
-        @Override
-        public void run() {
+        @Override public void run() {
             if (liveClockCheckBox != null && liveClockCheckBox.isChecked()) {
                 dateTimeEditText.setText(UiFormatting.formatLocalDateTime(new Date()));
                 calculateAndRenderAlignment();
@@ -102,8 +91,7 @@ public final class MainActivity extends Activity {
         }
     };
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         buildUserInterface();
         setInitialValues();
@@ -112,48 +100,28 @@ public final class MainActivity extends Activity {
         calculateAndRenderAlignment();
     }
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        liveClockHandler.post(liveClockRunnable);
-    }
+    @Override protected void onResume() { super.onResume(); liveClockHandler.post(liveClockRunnable); }
 
-    @Override
-    protected void onPause() {
+    @Override protected void onPause() {
         liveClockHandler.removeCallbacks(liveClockRunnable);
-        if (uvcPreviewController != null) {
-            uvcPreviewController.unregister();
-        }
+        if (uvcPreviewController != null) uvcPreviewController.unregister();
         super.onPause();
     }
 
-    @Override
-    protected void onDestroy() {
-        if (uvcPreviewController != null) {
-            uvcPreviewController.destroy();
-            uvcPreviewController = null;
-        }
-        if (reticleOverlayView != null) {
-            reticleOverlayView.destroy();
-        }
+    @Override protected void onDestroy() {
+        if (uvcPreviewController != null) { uvcPreviewController.destroy(); uvcPreviewController = null; }
+        if (reticleOverlayView != null) reticleOverlayView.destroy();
         super.onDestroy();
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_CAMERA_PERMISSION_FOR_UVC) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                openUvcCameraAfterRuntimePermission();
-            } else {
-                uvcStatusTextView.setText("Camera permission denied. Android requires CAMERA permission before this UVC backend can open preview.");
-            }
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) openUvcCameraAfterRuntimePermission();
+            else uvcStatusTextView.setText("Camera permission denied. Android requires CAMERA permission before this UVC backend can open preview.");
         } else if (requestCode == REQUEST_LOCATION_PERMISSION) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                fillLocationFromLastKnownProvider();
-            } else {
-                statusTextView.setText("Location permission denied. Enter latitude/longitude manually.");
-            }
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) fillLocationFromLastKnownProvider();
+            else statusTextView.setText("Location permission denied. Enter latitude/longitude manually.");
         }
     }
 
@@ -176,9 +144,7 @@ public final class MainActivity extends Activity {
         previewFrame.addView(reticleOverlayView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(false);
         root.addView(scrollView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f));
-
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.VERTICAL);
         controls.setPadding(dp(14), dp(12), dp(14), dp(16));
@@ -186,8 +152,7 @@ public final class MainActivity extends Activity {
         scrollView.addView(controls);
 
         controls.addView(label("Android Polaris — USB UVC polar alignment", 20, true));
-        controls.addView(note("UVC-only build. The camera preview keeps the UVC stream aspect; the reticle overlay uses the full original SVG from the sanitized browser page."));
-
+        controls.addView(note("UVC-only build. The camera preview keeps the UVC stream aspect; the overlay uses the full native reticle geometry from the sanitized browser drawing."));
         controls.addView(fieldLabel("USB OTG UVC camera"));
         LinearLayout uvcActionRow = horizontalRow();
         uvcActionRow.addView(button("Open USB UVC camera", new View.OnClickListener() { @Override public void onClick(View view) { requestCameraPermissionThenOpenUvc(); } }), weightParams());
@@ -202,7 +167,6 @@ public final class MainActivity extends Activity {
         timeRow.addView(dateTimeEditText, weightParams());
         timeRow.addView(button("Now", new View.OnClickListener() { @Override public void onClick(View view) { liveClockCheckBox.setChecked(false); dateTimeEditText.setText(UiFormatting.formatLocalDateTime(new Date())); calculateAndRenderAlignment(); } }), new LinearLayout.LayoutParams(dp(92), LinearLayout.LayoutParams.WRAP_CONTENT));
         controls.addView(timeRow);
-
         liveClockCheckBox = new CheckBox(this);
         liveClockCheckBox.setText("Live device time");
         liveClockCheckBox.setTextColor(android.graphics.Color.rgb(232, 232, 232));
@@ -310,120 +274,26 @@ public final class MainActivity extends Activity {
     private void calculateAndRenderAlignmentUnlessInitializing() { if (!isBuildingOrInitializingUi) calculateAndRenderAlignment(); }
     private void requestCameraPermissionThenOpenUvc() { if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) { requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION_FOR_UVC); return; } openUvcCameraAfterRuntimePermission(); }
     private void openUvcCameraAfterRuntimePermission() { UvcPreviewController controller = ensureUvcPreviewController(); if (controller != null) controller.requestPermissionAndOpenFirstCamera(); }
-
-    private UvcPreviewController ensureUvcPreviewController() {
-        if (uvcPreviewController != null) return uvcPreviewController;
-        try {
-            uvcPreviewController = new UvcPreviewController(this, uvcPreviewContainer, new UvcPreviewController.Listener() { @Override public void onUvcStatusChanged(String statusText) { runOnUiThread(new Runnable() { @Override public void run() { uvcStatusTextView.setText(statusText); } }); } });
-            return uvcPreviewController;
-        } catch (Throwable throwable) {
-            uvcPreviewController = null;
-            uvcStatusTextView.setText("UVC backend failed to initialize: " + throwable.getClass().getSimpleName() + ": " + throwable.getMessage());
-            return null;
-        }
-    }
-
+    private UvcPreviewController ensureUvcPreviewController() { if (uvcPreviewController != null) return uvcPreviewController; try { uvcPreviewController = new UvcPreviewController(this, uvcPreviewContainer, new UvcPreviewController.Listener() { @Override public void onUvcStatusChanged(String statusText) { runOnUiThread(new Runnable() { @Override public void run() { uvcStatusTextView.setText(statusText); } }); } }); return uvcPreviewController; } catch (Throwable throwable) { uvcPreviewController = null; uvcStatusTextView.setText("UVC backend failed to initialize: " + throwable.getClass().getSimpleName() + ": " + throwable.getMessage()); return null; } }
     private void refreshUvcStatus() { if (uvcPreviewController != null) { uvcStatusTextView.setText(uvcPreviewController.describeConnectedUvcDevices()); return; } uvcStatusTextView.setText(describeConnectedUvcDevicesWithAndroidUsbHost()); }
 
-    private String describeConnectedUvcDevicesWithAndroidUsbHost() {
-        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
-        if (usbManager == null) return "Android USB service is unavailable.";
-        StringBuilder builder = new StringBuilder();
-        int uvcCount = 0;
-        for (UsbDevice device : usbManager.getDeviceList().values()) {
-            if (!isUvcVideoDevice(device)) continue;
-            uvcCount++;
-            builder.append(String.format(Locale.US, "VID %04x / PID %04x, interfaces=%d, name=%s\n", device.getVendorId(), device.getProductId(), device.getInterfaceCount(), device.getDeviceName()));
-        }
-        if (uvcCount == 0) return "No raw USB UVC devices detected by Android USB Host.";
-        return uvcCount + " raw UVC device(s) detected by Android USB Host:\n" + builder.toString().trim() + "\nPress Open USB UVC camera to load the UVC backend and request USB permission.";
-    }
-
+    private String describeConnectedUvcDevicesWithAndroidUsbHost() { UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE); if (usbManager == null) return "Android USB service is unavailable."; StringBuilder builder = new StringBuilder(); int uvcCount = 0; for (UsbDevice device : usbManager.getDeviceList().values()) { if (!isUvcVideoDevice(device)) continue; uvcCount++; builder.append(String.format(Locale.US, "VID %04x / PID %04x, interfaces=%d, name=%s\n", device.getVendorId(), device.getProductId(), device.getInterfaceCount(), device.getDeviceName())); } if (uvcCount == 0) return "No raw USB UVC devices detected by Android USB Host."; return uvcCount + " raw UVC device(s) detected by Android USB Host:\n" + builder.toString().trim() + "\nPress Open USB UVC camera to load the UVC backend and request USB permission."; }
     private static boolean isUvcVideoDevice(UsbDevice device) { if (device == null) return false; for (int index = 0; index < device.getInterfaceCount(); index++) { UsbInterface usbInterface = device.getInterface(index); if (usbInterface != null && usbInterface.getInterfaceClass() == USB_VIDEO_CLASS) return true; } return false; }
-
     private void requestLocationOrFillFromLastKnownProvider() { if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) { requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, REQUEST_LOCATION_PERMISSION); return; } fillLocationFromLastKnownProvider(); }
 
-    private void fillLocationFromLastKnownProvider() {
-        LocationManager locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
-        if (locationManager == null) { statusTextView.setText("Location service is unavailable. Enter coordinates manually."); return; }
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) { statusTextView.setText("Location permission is required. Enter coordinates manually or grant permission."); return; }
-        Location bestLocation = null;
-        for (String provider : locationManager.getProviders(true)) {
-            Location candidate = locationManager.getLastKnownLocation(provider);
-            if (candidate != null && (bestLocation == null || candidate.getAccuracy() < bestLocation.getAccuracy())) bestLocation = candidate;
-        }
-        if (bestLocation == null) { statusTextView.setText("No last known location. Enable location in Android settings or enter coordinates manually."); startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)); return; }
-        latitudeEditText.setText(String.format(Locale.US, "%.6f", bestLocation.getLatitude()));
-        longitudeEditText.setText(String.format(Locale.US, "%.6f", bestLocation.getLongitude()));
-        if (bestLocation.hasAltitude()) elevationEditText.setText(String.format(Locale.US, "%.0f", bestLocation.getAltitude()));
-        statusTextView.setText("Filled last known Android location. Verify coordinates before alignment.");
-        calculateAndRenderAlignment();
-    }
+    private void fillLocationFromLastKnownProvider() { LocationManager locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE); if (locationManager == null) { statusTextView.setText("Location service is unavailable. Enter coordinates manually."); return; } if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) { statusTextView.setText("Location permission is required. Enter coordinates manually or grant permission."); return; } Location bestLocation = null; for (String provider : locationManager.getProviders(true)) { Location candidate = locationManager.getLastKnownLocation(provider); if (candidate != null && (bestLocation == null || candidate.getAccuracy() < bestLocation.getAccuracy())) bestLocation = candidate; } if (bestLocation == null) { statusTextView.setText("No last known location. Enable location or enter coordinates manually."); return; } latitudeEditText.setText(String.format(Locale.US, "%.6f", bestLocation.getLatitude())); longitudeEditText.setText(String.format(Locale.US, "%.6f", bestLocation.getLongitude())); if (bestLocation.hasAltitude()) elevationEditText.setText(String.format(Locale.US, "%.0f", bestLocation.getAltitude())); statusTextView.setText("Filled last known Android location. Verify coordinates before alignment."); calculateAndRenderAlignment(); }
 
-    private void calculateAndRenderAlignment() {
-        try {
-            clampOffsetDayToSelectedMonth();
-            AlignmentInput input = readAlignmentInputFromUi();
-            AlignmentResult result = alignmentCalculator.calculate(input);
-            reticleOverlayView.setAlignmentResult(result);
-            readoutTextView.setText(formatReadout(result, input));
-            statusTextView.setText(result.warningText.isEmpty() ? "Alignment calculated. Place Polaris on the pink target relative to the NCP/crosshair." : result.warningText);
-        } catch (Exception exception) {
-            reticleOverlayView.setAlignmentResult(null);
-            statusTextView.setText("Calculation error: " + exception.getMessage());
-        }
-    }
+    private void calculateAndRenderAlignment() { try { clampOffsetDayToSelectedMonth(); AlignmentInput input = readAlignmentInputFromUi(); AlignmentResult result = alignmentCalculator.calculate(input); reticleOverlayView.setAlignmentResult(result); readoutTextView.setText(formatReadout(result, input)); statusTextView.setText(result.warningText.isEmpty() ? "Alignment calculated. Place Polaris on the pink target relative to the NCP/crosshair." : result.warningText); } catch (Exception exception) { reticleOverlayView.setAlignmentResult(null); statusTextView.setText("Calculation error: " + exception.getMessage()); } }
+    private AlignmentInput readAlignmentInputFromUi() throws ParseException { Date selectedDate = UiFormatting.parseLocalDateTime(dateTimeEditText.getText().toString().trim()); double latitude = parseDouble(latitudeEditText, "Latitude"); double longitude = parseDouble(longitudeEditText, "Longitude"); double pressure = parseOptionalDouble(pressureEditText, 1013.25); double temperature = parseOptionalDouble(temperatureEditText, 10.0); double elevation = parseOptionalDouble(elevationEditText, 0.0); boolean lockToZeroHa = lockZeroHourAngleCheckBox.isChecked(); double targetRightAscensionHours = lockToZeroHa ? 0.0 : readTargetRightAscensionHoursFromUi(); int offsetMonth = offsetMonthSpinner.getSelectedItemPosition() + 1; int offsetDay = Math.round((float) parseOptionalDouble(offsetDayEditText, 1.0)); RefractionMode refractionMode = (RefractionMode) refractionSpinner.getSelectedItem(); if (refractionMode == null) refractionMode = RefractionMode.FIXED_BENNETT; return new AlignmentInput(selectedDate, latitude, longitude, targetRightAscensionHours, offsetMonth, offsetDay, lockToZeroHa, refractionMode, pressure, temperature, elevation); }
+    private double readTargetRightAscensionHoursFromUi() { double hours = parseOptionalDouble(rightAscensionHoursEditText, Double.NaN); double minutes = parseOptionalDouble(rightAscensionMinutesEditText, Double.NaN); double seconds = parseOptionalDouble(rightAscensionSecondsEditText, Double.NaN); if (!Double.isFinite(hours) || !Double.isFinite(minutes) || !Double.isFinite(seconds) || hours < 0.0 || hours >= 24.0 || minutes < 0.0 || minutes >= 60.0 || seconds < 0.0 || seconds >= 60.0) throw new IllegalArgumentException("Target RA must be valid hh/mm/ss."); return hours + minutes / 60.0 + seconds / 3600.0; }
 
-    private AlignmentInput readAlignmentInputFromUi() throws ParseException {
-        Date selectedDate = UiFormatting.parseLocalDateTime(dateTimeEditText.getText().toString().trim());
-        double latitude = parseDouble(latitudeEditText, "Latitude");
-        double longitude = parseDouble(longitudeEditText, "Longitude");
-        double pressure = parseOptionalDouble(pressureEditText, 1013.25);
-        double temperature = parseOptionalDouble(temperatureEditText, 10.0);
-        double elevation = parseOptionalDouble(elevationEditText, 0.0);
-        boolean lockToZeroHa = lockZeroHourAngleCheckBox.isChecked();
-        double targetRightAscensionHours = lockToZeroHa ? 0.0 : readTargetRightAscensionHoursFromUi();
-        int offsetMonth = offsetMonthSpinner.getSelectedItemPosition() + 1;
-        int offsetDay = Math.round((float) parseOptionalDouble(offsetDayEditText, 1.0));
-        RefractionMode refractionMode = (RefractionMode) refractionSpinner.getSelectedItem();
-        if (refractionMode == null) refractionMode = RefractionMode.FIXED_BENNETT;
-        return new AlignmentInput(selectedDate, latitude, longitude, targetRightAscensionHours, offsetMonth, offsetDay, lockToZeroHa, refractionMode, pressure, temperature, elevation);
-    }
-
-    private double readTargetRightAscensionHoursFromUi() {
-        double hours = parseOptionalDouble(rightAscensionHoursEditText, Double.NaN);
-        double minutes = parseOptionalDouble(rightAscensionMinutesEditText, Double.NaN);
-        double seconds = parseOptionalDouble(rightAscensionSecondsEditText, Double.NaN);
-        if (!Double.isFinite(hours) || !Double.isFinite(minutes) || !Double.isFinite(seconds) || hours < 0.0 || hours >= 24.0 || minutes < 0.0 || minutes >= 60.0 || seconds < 0.0 || seconds >= 60.0) throw new IllegalArgumentException("Target RA must be valid hh/mm/ss.");
-        return hours + minutes / 60.0 + seconds / 3600.0;
-    }
-
-    private String formatReadout(AlignmentResult result, AlignmentInput input) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("UTC JD: ").append(String.format(Locale.US, "%.6f", result.julianDateUtc)).append('\n');
-        builder.append("LAST: ").append(UiFormatting.formatHours(result.localApparentSiderealTimeDegrees / 15.0)).append(" (").append(String.format(Locale.US, "%.5f°", result.localApparentSiderealTimeDegrees)).append(")\n");
-        builder.append("LMST: ").append(UiFormatting.formatHours(result.localMeanSiderealTimeDegrees / 15.0)).append(" (").append(String.format(Locale.US, "%.5f°", result.localMeanSiderealTimeDegrees)).append(")\n");
-        builder.append("Target HA: ").append(UiFormatting.formatHours(result.activeHourAngleHours)).append(" (").append(String.format(Locale.US, "%.4f°", result.activeHourAngleDegrees)).append(")");
-        if (input.lockReticleToZeroHourAngle) builder.append(" — locked; live calculated HA ").append(UiFormatting.formatHours(result.calculatedTargetHourAngleHours)).append(" (").append(String.format(Locale.US, "%.4f°", result.calculatedTargetHourAngleDegrees)).append(")");
-        builder.append('\n');
-        builder.append("0h date label: ").append(formatDayMonth(result.zeroHourDateMonth, result.zeroHourDateDay)).append(" (").append(MONTH_NAMES[result.zeroHourDateMonth - 1]).append(")\n");
-        builder.append("Date/polar reticle rotation: ").append(String.format(Locale.US, "%.4f°", result.dateAndPolarReticleRotationDegrees)).append('\n');
-        builder.append("Polaris RA/Dec: ").append(UiFormatting.formatRightAscension(result.apparentRightAscensionRadians)).append(" / ").append(UiFormatting.formatDeclination(result.apparentDeclinationRadians)).append('\n');
-        builder.append("Polaris clock: ").append(UiFormatting.formatHours(result.polarisClockAngleDegrees / 15.0)).append(" (").append(String.format(Locale.US, "%.3f°", result.polarisClockAngleDegrees)).append(")\n");
-        builder.append("Alt/Az: ").append(UiFormatting.formatDegrees(result.trueAltitudeRadians, 3)).append(" / ").append(UiFormatting.formatDegrees(result.trueAzimuthRadians, 3)).append('\n');
-        builder.append("Refraction: ").append(String.format(Locale.US, "%.3f′ (%s)", result.refractionArcMinutes, result.refractionDescription)).append('\n');
-        builder.append("Marker SVG: x=").append(String.format(Locale.US, "%.2f", result.markerSvgX)).append(", y=").append(String.format(Locale.US, "%.2f", result.markerSvgY)).append('\n');
-        builder.append("Ring scale: ").append(String.format(Locale.US, "%.2f px, %.1f px/tan-rad", result.nominalRingRadiusSvgPixels, result.pixelPerTangentRadian)).append('\n');
-        builder.append("ΔT: ").append(String.format(Locale.US, "%.2f s", result.deltaTSeconds));
-        return builder.toString();
-    }
+    private String formatReadout(AlignmentResult result, AlignmentInput input) { StringBuilder builder = new StringBuilder(); builder.append("UTC JD: ").append(String.format(Locale.US, "%.6f", result.julianDateUtc)).append('\n'); builder.append("LAST: ").append(UiFormatting.formatHours(result.localApparentSiderealTimeDegrees / 15.0)).append(" (").append(String.format(Locale.US, "%.5f°", result.localApparentSiderealTimeDegrees)).append(")\n"); builder.append("LMST: ").append(UiFormatting.formatHours(result.localMeanSiderealTimeDegrees / 15.0)).append(" (").append(String.format(Locale.US, "%.5f°", result.localMeanSiderealTimeDegrees)).append(")\n"); builder.append("Target HA: ").append(UiFormatting.formatHours(result.activeHourAngleHours)).append(" (").append(String.format(Locale.US, "%.4f°", result.activeHourAngleDegrees)).append(")"); if (input.lockReticleToZeroHourAngle) builder.append(" — locked; live calculated HA ").append(UiFormatting.formatHours(result.calculatedTargetHourAngleHours)).append(" (").append(String.format(Locale.US, "%.4f°", result.calculatedTargetHourAngleDegrees)).append(")"); builder.append('\n'); builder.append("0h date label: ").append(formatDayMonth(result.zeroHourDateMonth, result.zeroHourDateDay)).append(" (").append(MONTH_NAMES[result.zeroHourDateMonth - 1]).append(")\n"); builder.append("Date/polar reticle rotation: ").append(String.format(Locale.US, "%.4f°", result.dateAndPolarReticleRotationDegrees)).append('\n'); builder.append("Polaris RA/Dec: ").append(UiFormatting.formatRightAscension(result.apparentRightAscensionRadians)).append(" / ").append(UiFormatting.formatDeclination(result.apparentDeclinationRadians)).append('\n'); builder.append("Polaris clock: ").append(UiFormatting.formatHours(result.polarisClockAngleDegrees / 15.0)).append(" (").append(String.format(Locale.US, "%.3f°", result.polarisClockAngleDegrees)).append(")\n"); builder.append("Alt/Az: ").append(UiFormatting.formatDegrees(result.trueAltitudeRadians, 3)).append(" / ").append(UiFormatting.formatDegrees(result.trueAzimuthRadians, 3)).append('\n'); builder.append("Refraction: ").append(String.format(Locale.US, "%.3f′ (%s)", result.refractionArcMinutes, result.refractionDescription)).append('\n'); builder.append("Marker reticle: x=").append(String.format(Locale.US, "%.2f", result.markerReticleX)).append(", y=").append(String.format(Locale.US, "%.2f", result.markerReticleY)).append('\n'); builder.append("Ring scale: ").append(String.format(Locale.US, "%.2f px, %.1f px/tan-rad", result.nominalRingRadiusReticlePixels, result.pixelPerTangentRadian)).append('\n'); builder.append("ΔT: ").append(String.format(Locale.US, "%.2f s", result.deltaTSeconds)); return builder.toString(); }
 
     private void clampOffsetDayToSelectedMonth() { if (offsetMonthSpinner == null || offsetDayEditText == null) return; int selectedMonth = offsetMonthSpinner.getSelectedItemPosition() + 1; if (selectedMonth < 1 || selectedMonth > 12) return; int maximumDay = MONTH_DAYS[selectedMonth - 1]; String rawText = offsetDayEditText.getText().toString().trim(); if (rawText.isEmpty()) return; try { int requestedDay = Math.round(Float.parseFloat(rawText)); int clampedDay = Math.max(1, Math.min(maximumDay, requestedDay)); String clampedText = String.valueOf(clampedDay); if (!clampedText.equals(rawText)) { offsetDayEditText.setText(clampedText); offsetDayEditText.setSelection(offsetDayEditText.getText().length()); } } catch (NumberFormatException ignored) { } }
     private void updateAtmosphereFieldState() { RefractionMode mode = (RefractionMode) refractionSpinner.getSelectedItem(); boolean usesPressure = mode == RefractionMode.SCALED_PRESSURE_TEMPERATURE; boolean usesTemperature = mode == RefractionMode.SCALED_PRESSURE_TEMPERATURE || mode == RefractionMode.ALTITUDE_PRESSURE_TEMPERATURE; boolean usesElevation = mode == RefractionMode.ALTITUDE_PRESSURE_TEMPERATURE; pressureEditText.setEnabled(usesPressure); temperatureEditText.setEnabled(usesTemperature); elevationEditText.setEnabled(usesElevation); }
     private static double parseDouble(EditText editText, String fieldName) { String text = editText.getText().toString().trim(); if (text.isEmpty()) throw new IllegalArgumentException(fieldName + " is required."); try { return Double.parseDouble(text); } catch (NumberFormatException exception) { throw new IllegalArgumentException(fieldName + " must be a valid number."); } }
     private static double parseOptionalDouble(EditText editText, double fallback) { String text = editText.getText().toString().trim(); if (text.isEmpty()) return fallback; try { return Double.parseDouble(text); } catch (NumberFormatException exception) { return fallback; } }
     private static String formatDayMonth(int month, int day) { return String.format(Locale.US, "%02d/%02d", day, month); }
-
     private TextView label(String text, int sp, boolean bold) { TextView textView = new TextView(this); textView.setText(text); textView.setTextColor(android.graphics.Color.rgb(242, 238, 238)); textView.setTextSize(sp); textView.setGravity(Gravity.START); textView.setPadding(0, dp(4), 0, dp(6)); textView.setTypeface(null, bold ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL); return textView; }
     private TextView fieldLabel(String text) { TextView textView = label(text, 14, true); textView.setTextColor(android.graphics.Color.rgb(255, 204, 0)); return textView; }
     private TextView note(String text) { TextView textView = label(text, 13, false); textView.setTextColor(android.graphics.Color.rgb(170, 175, 186)); textView.setPadding(0, dp(4), 0, dp(8)); return textView; }
@@ -434,6 +304,5 @@ public final class MainActivity extends Activity {
     private LinearLayout horizontalRow() { LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL); row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(0, dp(4), 0, dp(4)); return row; }
     private LinearLayout.LayoutParams weightParams() { LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f); params.setMargins(dp(2), dp(2), dp(2), dp(2)); return params; }
     private int dp(int value) { return (int) Math.round(value * getResources().getDisplayMetrics().density); }
-
     private abstract static class SimpleTextWatcher implements TextWatcher { @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { } @Override public void onTextChanged(CharSequence s, int start, int before, int count) { } }
 }
