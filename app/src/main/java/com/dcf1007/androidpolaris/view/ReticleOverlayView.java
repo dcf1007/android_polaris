@@ -21,9 +21,9 @@ import com.dcf1007.androidpolaris.view.reticle.NativeReticleGeometry;
  * {@link AlignmentResult}.</p>
  */
 public final class ReticleOverlayView extends View {
-    private static final RectF RETICLE_VIEWPORT = new RectF(0.0f, 0.0f,
-            (float) PolarisAlignmentCalculator.SVG_VIEWBOX_WIDTH,
-            (float) PolarisAlignmentCalculator.SVG_VIEWBOX_HEIGHT);
+    private static final RectF RETICLE_DESIGN_BOUNDS = new RectF(0.0f, 0.0f,
+            (float) PolarisAlignmentCalculator.RETICLE_VIEWBOX_WIDTH,
+            (float) PolarisAlignmentCalculator.RETICLE_VIEWBOX_HEIGHT);
 
     private final NativeCanvasReticle.Group reticleRoot = NativeReticleGeometry.createReticle();
     private AlignmentResult alignmentResult;
@@ -66,15 +66,15 @@ public final class ReticleOverlayView extends View {
     }
 
     /**
-     * Fit the original coordinate space inside this Android view without stretching.
+     * Fit the reticle design-space inside this Android view without stretching.
      *
      * <p>This preserves reticle proportions and keeps the overlay geometrically aligned with the
      * camera preview instead of forcing a different aspect ratio.</p>
      */
     private ViewportTransform computeViewportTransform() {
-        float scale = (float) Math.min(getWidth() / RETICLE_VIEWPORT.width(), getHeight() / RETICLE_VIEWPORT.height());
-        float usedWidth = RETICLE_VIEWPORT.width() * scale;
-        float usedHeight = RETICLE_VIEWPORT.height() * scale;
+        float scale = (float) Math.min(getWidth() / RETICLE_DESIGN_BOUNDS.width(), getHeight() / RETICLE_DESIGN_BOUNDS.height());
+        float usedWidth = RETICLE_DESIGN_BOUNDS.width() * scale;
+        float usedHeight = RETICLE_DESIGN_BOUNDS.height() * scale;
         return new ViewportTransform(scale, (getWidth() - usedWidth) / 2.0f, (getHeight() - usedHeight) / 2.0f);
     }
 
