@@ -5,6 +5,9 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbInterface;
+import android.hardware.usb.UsbManager;
 import android.location.Location;
 import android.location.LocationManager;
 import android.os.Bundle;
@@ -31,7 +34,6 @@ import com.dcf1007.androidpolaris.model.AlignmentResult;
 import com.dcf1007.androidpolaris.model.RefractionMode;
 import com.dcf1007.androidpolaris.util.UiFormatting;
 import com.dcf1007.androidpolaris.view.ReticleOverlayView;
-import com.jiangdg.ausbc.widget.AspectRatioTextureView;
 
 import java.text.ParseException;
 import java.util.Date;
@@ -40,20 +42,24 @@ import java.util.Locale;
 /**
  * Main single-activity Android app.
  *
- * The camera path is intentionally USB OTG / UVC only:
- * - UvcPreviewController handles Android USB Host permission and AUSBC/libuvc preview.
- * - No Camera2 enumeration, built-in-camera preview, or Camera2 fallback is used.
- * - PolarisAlignmentCalculator owns the astronomy and stays independent of camera IO.
- * - ReticleOverlayView draws the polar-scope target over the live UVC preview.
+ * <p>The launch path is deliberately kept free of AUSBC/libuvc initialization. The app now
+ * starts using only Android framework classes, draws the reticle overlay, and performs the
+ * Polaris calculation before any USB camera backend is touched. The UVC backend is created
+ * lazily only after the user presses "Open USB UVC camera". This keeps a USB-library or
+ * device-specific failure from crashing the whole app at startup.</p>
+ *
+ * <p>The camera path is USB OTG / UVC only. Camera2 and built-in phone-camera workflows are
+ * intentionally absent.</p>
  */
 public final class MainActivity extends Activity {
     private static final int REQUEST_CAMERA_PERMISSION_FOR_UVC = 1001;
     private static final int REQUEST_LOCATION_PERMISSION = 1002;
+    private static final int USB_VIDEO_CLASS = 14;
 
     private final Handler liveClockHandler = new Handler(Looper.getMainLooper());
     private final PolarisAlignmentCalculator alignmentCalculator = new PolarisAlignmentCalculator();
 
-    private AspectRatioTextureView uvcPreviewView;
+    private FrameLayout uvcPreviewContainer;
     private ReticleOverlayView reticleOverlayView;
     private Spinner refractionSpinner;
     private CheckBox liveClockCheckBox;
@@ -67,6 +73,10 @@ public final class MainActivity extends Activity {
     private TextView uvcStatusTextView;
     private TextView readoutTextView;
 
+    /**
+     * Created lazily. Keeping this null during app launch prevents AUSBC/libuvc from being
+     * initialized during Activity.onCreate()/onResume().
+     */
     private UvcPreviewController uvcPreviewController;
 
     private final Runnable liveClockRunnable = new Runnable() {
@@ -84,19 +94,6 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         buildUserInterface();
-
-        uvcPreviewController = new UvcPreviewController(this, uvcPreviewView, new UvcPreviewController.Listener() {
-            @Override
-            public void onUvcStatusChanged(String statusText) {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        uvcStatusTextView.setText(statusText);
-                    }
-                });
-            }
-        });
-
         setInitialValues();
         wireUserInterfaceActions();
         refreshUvcStatus();
@@ -106,20 +103,24 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        uvcPreviewController.register();
         liveClockHandler.post(liveClockRunnable);
     }
 
     @Override
     protected void onPause() {
         liveClockHandler.removeCallbacks(liveClockRunnable);
-        uvcPreviewController.unregister();
+        if (uvcPreviewController != null) {
+            uvcPreviewController.unregister();
+        }
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
-        uvcPreviewController.destroy();
+        if (uvcPreviewController != null) {
+            uvcPreviewController.destroy();
+            uvcPreviewController = null;
+        }
         super.onDestroy();
     }
 
@@ -128,9 +129,9 @@ public final class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_CAMERA_PERMISSION_FOR_UVC) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                uvcPreviewController.requestPermissionAndOpenFirstCamera();
+                openUvcCameraAfterRuntimePermission();
             } else {
-                uvcStatusTextView.setText("Camera permission denied. The UVC backend requires CAMERA permission on modern Android before opening preview.");
+                uvcStatusTextView.setText("Camera permission denied. Android requires CAMERA permission before this UVC backend can open preview.");
             }
         } else if (requestCode == REQUEST_LOCATION_PERMISSION) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
@@ -154,8 +155,11 @@ public final class MainActivity extends Activity {
                 1.0f
         ));
 
-        uvcPreviewView = new AspectRatioTextureView(this);
-        previewFrame.addView(uvcPreviewView, new FrameLayout.LayoutParams(
+        // The UVC preview view is inserted here lazily by UvcPreviewController.
+        // This container is an Android framework class, so app startup does not load AUSBC.
+        uvcPreviewContainer = new FrameLayout(this);
+        uvcPreviewContainer.setBackgroundColor(android.graphics.Color.BLACK);
+        previewFrame.addView(uvcPreviewContainer, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
@@ -180,7 +184,7 @@ public final class MainActivity extends Activity {
         scrollView.addView(controls);
 
         controls.addView(label("Android Polaris — USB UVC polar alignment", 20, true));
-        controls.addView(note("This build is USB OTG / UVC only. Built-in phone cameras and Camera2 enumeration are intentionally removed."));
+        controls.addView(note("UVC-only build. App startup is independent of the UVC library; the backend is loaded only when Open USB UVC camera is pressed."));
 
         LinearLayout uvcActionRow = horizontalRow();
         uvcActionRow.addView(button("Open USB UVC camera", new View.OnClickListener() {
@@ -299,14 +303,88 @@ public final class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION_FOR_UVC);
             return;
         }
-        uvcPreviewController.requestPermissionAndOpenFirstCamera();
+        openUvcCameraAfterRuntimePermission();
+    }
+
+    private void openUvcCameraAfterRuntimePermission() {
+        UvcPreviewController controller = ensureUvcPreviewController();
+        if (controller != null) {
+            controller.requestPermissionAndOpenFirstCamera();
+        }
+    }
+
+    private UvcPreviewController ensureUvcPreviewController() {
+        if (uvcPreviewController != null) {
+            return uvcPreviewController;
+        }
+
+        try {
+            uvcPreviewController = new UvcPreviewController(this, uvcPreviewContainer, new UvcPreviewController.Listener() {
+                @Override
+                public void onUvcStatusChanged(String statusText) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            uvcStatusTextView.setText(statusText);
+                        }
+                    });
+                }
+            });
+            return uvcPreviewController;
+        } catch (Throwable throwable) {
+            uvcPreviewController = null;
+            uvcStatusTextView.setText("UVC backend failed to initialize: " + throwable.getClass().getSimpleName() + ": " + throwable.getMessage());
+            return null;
+        }
     }
 
     private void refreshUvcStatus() {
-        if (uvcPreviewController == null) {
+        if (uvcPreviewController != null) {
+            uvcStatusTextView.setText(uvcPreviewController.describeConnectedUvcDevices());
             return;
         }
-        uvcStatusTextView.setText(uvcPreviewController.describeConnectedUvcDevices());
+        uvcStatusTextView.setText(describeConnectedUvcDevicesWithAndroidUsbHost());
+    }
+
+    private String describeConnectedUvcDevicesWithAndroidUsbHost() {
+        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        if (usbManager == null) {
+            return "Android USB service is unavailable.";
+        }
+
+        StringBuilder builder = new StringBuilder();
+        int uvcCount = 0;
+        for (UsbDevice device : usbManager.getDeviceList().values()) {
+            if (!isUvcVideoDevice(device)) {
+                continue;
+            }
+            uvcCount++;
+            builder.append(String.format(Locale.US,
+                    "VID %04x / PID %04x, interfaces=%d, name=%s\n",
+                    device.getVendorId(),
+                    device.getProductId(),
+                    device.getInterfaceCount(),
+                    device.getDeviceName()));
+        }
+
+        if (uvcCount == 0) {
+            return "No raw USB UVC devices detected by Android USB Host.";
+        }
+        return uvcCount + " raw UVC device(s) detected by Android USB Host:\n" + builder.toString().trim()
+                + "\nPress Open USB UVC camera to load the UVC backend and request USB permission.";
+    }
+
+    private static boolean isUvcVideoDevice(UsbDevice device) {
+        if (device == null) {
+            return false;
+        }
+        for (int index = 0; index < device.getInterfaceCount(); index++) {
+            UsbInterface usbInterface = device.getInterface(index);
+            if (usbInterface != null && usbInterface.getInterfaceClass() == USB_VIDEO_CLASS) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void requestLocationOrFillFromLastKnownProvider() {
