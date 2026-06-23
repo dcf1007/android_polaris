@@ -7,12 +7,11 @@ import android.hardware.usb.UsbInterface;
 import android.view.TextureView;
 
 import com.jiangdg.ausbc.MultiCameraClient;
-import com.jiangdg.ausbc.camera.CameraUVC;
 import com.jiangdg.ausbc.camera.bean.CameraRequest;
 import com.jiangdg.ausbc.callback.ICameraStateCallBack;
 import com.jiangdg.ausbc.callback.IDeviceConnectCallBack;
 import com.jiangdg.ausbc.widget.AspectRatioTextureView;
-import com.jiangdg.usb.USBMonitor;
+import com.serenegiant.usb.USBMonitor;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -23,13 +22,19 @@ import java.util.Map;
 /**
  * USB OTG / UVC-only preview controller.
  *
- * This class intentionally contains no Camera2 code. The target hardware path is:
+ * <p>This class intentionally contains no Camera2 code. The target hardware path is:</p>
  *
- *     USB OTG camera -> Android USB Host permission -> AUSBC/libuvc backend -> TextureView preview
+ * <pre>
+ * USB OTG camera -> Android USB Host permission -> AUSBC/libuvc backend -> TextureView preview
+ * </pre>
  *
- * The controller owns only the USB/UVC lifecycle. MainActivity owns Android runtime
- * permissions and the UI. The astronomy/reticle overlay remains independent of the
- * camera backend.
+ * <p>The controller owns only the USB/UVC lifecycle. MainActivity owns Android runtime
+ * permissions and the UI. The astronomy/reticle overlay remains independent of the camera backend.</p>
+ *
+ * <p>The code is written against the pinned AUSBC 3.2.7 API. That release exposes UVC
+ * camera instances as {@link MultiCameraClient.Camera}, uses Serenegiant's
+ * {@link USBMonitor.UsbControlBlock} type, and supports a compact {@link CameraRequest}
+ * with preview size and AF/AE settings.</p>
  */
 public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
@@ -47,12 +52,12 @@ public final class UvcPreviewController {
     private final MultiCameraClient uvcClient;
 
     private final Map<Integer, UsbDevice> detectedUvcDevicesById = new LinkedHashMap<>();
-    private final Map<Integer, MultiCameraClient.ICamera> uvcCamerasByDeviceId = new LinkedHashMap<>();
+    private final Map<Integer, MultiCameraClient.Camera> uvcCamerasByDeviceId = new LinkedHashMap<>();
 
     private boolean isUsbMonitorRegistered;
     private boolean isPreviewSurfaceAvailable;
     private UsbDevice pendingOpenDevice;
-    private MultiCameraClient.ICamera activeUvcCamera;
+    private MultiCameraClient.Camera activeUvcCamera;
 
     public UvcPreviewController(Context context, AspectRatioTextureView previewView, Listener listener) {
         this.context = context;
@@ -95,8 +100,8 @@ public final class UvcPreviewController {
     /**
      * Requests Android USB permission for the first detected UVC device.
      *
-     * The request is asynchronous. If the user grants permission, AUSBC calls
-     * onConnectDev(), where the preview is opened.
+     * <p>The request is asynchronous. If the user grants permission, AUSBC calls
+     * {@code onConnectDev()}, where the preview is opened.</p>
      */
     public void requestPermissionAndOpenFirstCamera() {
         if (!isUsbMonitorRegistered) {
@@ -112,7 +117,10 @@ public final class UvcPreviewController {
 
         pendingOpenDevice = firstDevice;
         notifyStatus("Requesting USB permission for " + describeDeviceBrief(firstDevice) + "…");
-        uvcClient.requestPermission(firstDevice);
+        boolean requestStarted = uvcClient.requestPermission(firstDevice);
+        if (!requestStarted) {
+            notifyStatus("USB permission request could not start. Reconnect the camera and try again.");
+        }
     }
 
     /** Returns a human-readable list of currently detected UVC devices. */
@@ -160,7 +168,7 @@ public final class UvcPreviewController {
                     return;
                 }
                 detectedUvcDevicesById.remove(device.getDeviceId());
-                MultiCameraClient.ICamera removedCamera = uvcCamerasByDeviceId.remove(device.getDeviceId());
+                MultiCameraClient.Camera removedCamera = uvcCamerasByDeviceId.remove(device.getDeviceId());
                 if (removedCamera != null) {
                     removedCamera.closeCamera();
                 }
@@ -180,7 +188,7 @@ public final class UvcPreviewController {
                 }
                 rememberDetectedDevice(device);
                 pendingOpenDevice = device;
-                MultiCameraClient.ICamera camera = getOrCreateUvcCamera(device);
+                MultiCameraClient.Camera camera = getOrCreateUvcCamera(device);
                 camera.setUsbControlBlock(controlBlock);
                 camera.setCameraStateCallBack(createCameraStateCallback());
                 activeUvcCamera = camera;
@@ -204,7 +212,7 @@ public final class UvcPreviewController {
     private ICameraStateCallBack createCameraStateCallback() {
         return new ICameraStateCallBack() {
             @Override
-            public void onCameraState(MultiCameraClient.ICamera camera, ICameraStateCallBack.State state, String message) {
+            public void onCameraState(MultiCameraClient.Camera camera, ICameraStateCallBack.State state, String message) {
                 if (state == ICameraStateCallBack.State.OPENED) {
                     notifyStatus("UVC preview opened. Use the pink Polaris target relative to the reticle NCP/crosshair.");
                 } else if (state == ICameraStateCallBack.State.CLOSED) {
@@ -229,7 +237,7 @@ public final class UvcPreviewController {
 
             @Override
             public void onSurfaceTextureSizeChanged(SurfaceTexture surfaceTexture, int width, int height) {
-                // AUSBC handles aspect-ratio layout internally through AspectRatioTextureView.
+                // AUSBC handles the actual UVC stream. The overlay is resized independently by Android layout.
             }
 
             @Override
@@ -246,7 +254,7 @@ public final class UvcPreviewController {
         });
     }
 
-    private void openCameraWhenPreviewSurfaceIsReady(MultiCameraClient.ICamera camera, UsbDevice device) {
+    private void openCameraWhenPreviewSurfaceIsReady(MultiCameraClient.Camera camera, UsbDevice device) {
         if (!isPreviewSurfaceAvailable) {
             notifyStatus("UVC permission granted for " + describeDeviceBrief(device) + ", waiting for preview surface…");
             return;
@@ -260,23 +268,27 @@ public final class UvcPreviewController {
         }
     }
 
+    /**
+     * Creates the minimal AUSBC 3.2.7 request needed for preview.
+     *
+     * <p>Newer AUSBC versions expose render/audio/format options on this builder. Version 3.2.7
+     * does not, so the native backend internally tries MJPEG and falls back to YUYV where needed.</p>
+     */
     private CameraRequest createPreviewRequest() {
         return new CameraRequest.Builder()
                 .setPreviewWidth(DEFAULT_PREVIEW_WIDTH)
                 .setPreviewHeight(DEFAULT_PREVIEW_HEIGHT)
-                .setRenderMode(CameraRequest.RenderMode.NORMAL)
-                .setPreviewFormat(CameraRequest.PreviewFormat.FORMAT_MJPEG)
-                .setAspectRatioShow(true)
-                .setAudioSource(CameraRequest.AudioSource.NONE)
+                .setContinuousAFModel(true)
+                .setContinuousAutoModel(true)
                 .create();
     }
 
-    private MultiCameraClient.ICamera getOrCreateUvcCamera(UsbDevice device) {
-        MultiCameraClient.ICamera existingCamera = uvcCamerasByDeviceId.get(device.getDeviceId());
+    private MultiCameraClient.Camera getOrCreateUvcCamera(UsbDevice device) {
+        MultiCameraClient.Camera existingCamera = uvcCamerasByDeviceId.get(device.getDeviceId());
         if (existingCamera != null) {
             return existingCamera;
         }
-        MultiCameraClient.ICamera createdCamera = new CameraUVC(context, device);
+        MultiCameraClient.Camera createdCamera = new MultiCameraClient.Camera(context, device);
         uvcCamerasByDeviceId.put(device.getDeviceId(), createdCamera);
         return createdCamera;
     }
