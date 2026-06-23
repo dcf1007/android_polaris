@@ -12,7 +12,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
-import android.view.TextureView;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -26,43 +25,36 @@ import android.widget.Spinner;
 import android.widget.TextView;
 
 import com.dcf1007.androidpolaris.astro.PolarisAlignmentCalculator;
-import com.dcf1007.androidpolaris.camera.Camera2PreviewController;
-import com.dcf1007.androidpolaris.camera.CameraDeviceInfo;
-import com.dcf1007.androidpolaris.camera.UsbUvcDeviceMonitor;
+import com.dcf1007.androidpolaris.camera.UvcPreviewController;
 import com.dcf1007.androidpolaris.model.AlignmentInput;
 import com.dcf1007.androidpolaris.model.AlignmentResult;
 import com.dcf1007.androidpolaris.model.RefractionMode;
 import com.dcf1007.androidpolaris.util.UiFormatting;
 import com.dcf1007.androidpolaris.view.ReticleOverlayView;
+import com.jiangdg.ausbc.widget.AspectRatioTextureView;
 
 import java.text.ParseException;
 import java.util.Date;
-import java.util.List;
 import java.util.Locale;
 
 /**
  * Main single-activity Android app.
  *
- * The app is intentionally small and explicit:
- * - Camera2 drives the live preview.
- * - UsbUvcDeviceMonitor detects OTG UVC devices through Android USB Host APIs.
- * - PolarisAlignmentCalculator owns the astronomy.
- * - ReticleOverlayView draws the polar-scope target over the camera feed.
- *
- * Keeping these responsibilities separate makes it easier to replace one layer
- * later, for example adding a native libuvc backend without touching the
- * astronomical calculation code.
+ * The camera path is intentionally USB OTG / UVC only:
+ * - UvcPreviewController handles Android USB Host permission and AUSBC/libuvc preview.
+ * - No Camera2 enumeration, built-in-camera preview, or Camera2 fallback is used.
+ * - PolarisAlignmentCalculator owns the astronomy and stays independent of camera IO.
+ * - ReticleOverlayView draws the polar-scope target over the live UVC preview.
  */
 public final class MainActivity extends Activity {
-    private static final int REQUEST_CAMERA_PERMISSION = 1001;
+    private static final int REQUEST_CAMERA_PERMISSION_FOR_UVC = 1001;
     private static final int REQUEST_LOCATION_PERMISSION = 1002;
 
     private final Handler liveClockHandler = new Handler(Looper.getMainLooper());
     private final PolarisAlignmentCalculator alignmentCalculator = new PolarisAlignmentCalculator();
 
-    private TextureView cameraTextureView;
+    private AspectRatioTextureView uvcPreviewView;
     private ReticleOverlayView reticleOverlayView;
-    private Spinner cameraSpinner;
     private Spinner refractionSpinner;
     private CheckBox liveClockCheckBox;
     private EditText dateTimeEditText;
@@ -72,13 +64,10 @@ public final class MainActivity extends Activity {
     private EditText temperatureEditText;
     private EditText elevationEditText;
     private TextView statusTextView;
-    private TextView cameraStatusTextView;
-    private TextView usbStatusTextView;
+    private TextView uvcStatusTextView;
     private TextView readoutTextView;
 
-    private Camera2PreviewController camera2PreviewController;
-    private UsbUvcDeviceMonitor usbUvcDeviceMonitor;
-    private ArrayAdapter<CameraDeviceInfo> cameraAdapter;
+    private UvcPreviewController uvcPreviewController;
 
     private final Runnable liveClockRunnable = new Runnable() {
         @Override
@@ -96,26 +85,13 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         buildUserInterface();
 
-        camera2PreviewController = new Camera2PreviewController(this, cameraTextureView, new Camera2PreviewController.StatusListener() {
+        uvcPreviewController = new UvcPreviewController(this, uvcPreviewView, new UvcPreviewController.Listener() {
             @Override
-            public void onCameraStatus(String statusText) {
+            public void onUvcStatusChanged(String statusText) {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        cameraStatusTextView.setText(statusText);
-                    }
-                });
-            }
-        });
-
-        usbUvcDeviceMonitor = new UsbUvcDeviceMonitor(this, new UsbUvcDeviceMonitor.Listener() {
-            @Override
-            public void onUsbStatus(String statusText) {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        usbStatusTextView.setText(statusText);
-                        refreshCameraList();
+                        uvcStatusTextView.setText(statusText);
                     }
                 });
             }
@@ -123,36 +99,38 @@ public final class MainActivity extends Activity {
 
         setInitialValues();
         wireUserInterfaceActions();
-        refreshCameraList();
-        refreshUsbStatus();
+        refreshUvcStatus();
         calculateAndRenderAlignment();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        usbUvcDeviceMonitor.register();
-        camera2PreviewController.startBackgroundThread();
+        uvcPreviewController.register();
         liveClockHandler.post(liveClockRunnable);
     }
 
     @Override
     protected void onPause() {
         liveClockHandler.removeCallbacks(liveClockRunnable);
-        camera2PreviewController.closeCamera();
-        camera2PreviewController.stopBackgroundThread();
-        usbUvcDeviceMonitor.unregister();
+        uvcPreviewController.unregister();
         super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        uvcPreviewController.destroy();
+        super.onDestroy();
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_CAMERA_PERMISSION) {
+        if (requestCode == REQUEST_CAMERA_PERMISSION_FOR_UVC) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                openSelectedCamera();
+                uvcPreviewController.requestPermissionAndOpenFirstCamera();
             } else {
-                cameraStatusTextView.setText("Camera permission denied. Camera2 preview cannot start.");
+                uvcStatusTextView.setText("Camera permission denied. The UVC backend requires CAMERA permission on modern Android before opening preview.");
             }
         } else if (requestCode == REQUEST_LOCATION_PERMISSION) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
@@ -176,8 +154,8 @@ public final class MainActivity extends Activity {
                 1.0f
         ));
 
-        cameraTextureView = new TextureView(this);
-        previewFrame.addView(cameraTextureView, new FrameLayout.LayoutParams(
+        uvcPreviewView = new AspectRatioTextureView(this);
+        previewFrame.addView(uvcPreviewView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
@@ -201,31 +179,27 @@ public final class MainActivity extends Activity {
         controls.setBackgroundColor(android.graphics.Color.rgb(17, 19, 24));
         scrollView.addView(controls);
 
-        TextView title = label("Android Polaris — Camera2 polar alignment", 20, true);
-        controls.addView(title);
-        controls.addView(note("Camera2 handles built-in cameras and OTG/UVC cameras that Android exposes as external Camera2 devices. Raw UVC devices are detected through USB Host and reported below."));
+        controls.addView(label("Android Polaris — USB UVC polar alignment", 20, true));
+        controls.addView(note("This build is USB OTG / UVC only. Built-in phone cameras and Camera2 enumeration are intentionally removed."));
 
-        cameraSpinner = new Spinner(this);
-        controls.addView(fieldLabel("Camera2 device"));
-        controls.addView(cameraSpinner);
-
-        LinearLayout cameraButtons = horizontalRow();
-        cameraButtons.addView(button("Refresh cameras", new View.OnClickListener() {
+        LinearLayout uvcActionRow = horizontalRow();
+        uvcActionRow.addView(button("Open USB UVC camera", new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                refreshCameraList();
+                requestCameraPermissionThenOpenUvc();
             }
         }), weightParams());
-        cameraButtons.addView(button("Open camera", new View.OnClickListener() {
+        uvcActionRow.addView(button("USB status", new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                openSelectedCamera();
+                refreshUvcStatus();
             }
         }), weightParams());
-        controls.addView(cameraButtons);
+        controls.addView(fieldLabel("USB OTG UVC camera"));
+        controls.addView(uvcActionRow);
 
-        cameraStatusTextView = note("Camera2 status: not opened.");
-        controls.addView(cameraStatusTextView);
+        uvcStatusTextView = note("UVC status: not scanned.");
+        controls.addView(uvcStatusTextView);
 
         LinearLayout timeRow = horizontalRow();
         dateTimeEditText = editText("yyyy-MM-dd HH:mm:ss");
@@ -243,7 +217,7 @@ public final class MainActivity extends Activity {
         controls.addView(timeRow);
 
         liveClockCheckBox = new CheckBox(this);
-        liveClockCheckBox.setText("Live browser/device time");
+        liveClockCheckBox.setText("Live device time");
         liveClockCheckBox.setTextColor(android.graphics.Color.rgb(232, 232, 232));
         liveClockCheckBox.setChecked(true);
         controls.addView(liveClockCheckBox);
@@ -279,33 +253,16 @@ public final class MainActivity extends Activity {
         atmosphereRow.addView(elevationEditText, weightParams());
         controls.addView(atmosphereRow);
 
-        LinearLayout actionRow = horizontalRow();
-        actionRow.addView(button("Calculate", new View.OnClickListener() {
+        controls.addView(button("Calculate alignment", new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 calculateAndRenderAlignment();
             }
-        }), weightParams());
-        actionRow.addView(button("USB status", new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                refreshUsbStatus();
-            }
-        }), weightParams());
-        controls.addView(actionRow);
-
-        controls.addView(button("Request permission for first raw UVC device", new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                usbUvcDeviceMonitor.requestPermissionForFirstUvcDevice();
-            }
         }));
 
         statusTextView = note("Alignment status: waiting for input.");
-        usbStatusTextView = note("USB status: not scanned.");
         readoutTextView = note("Readouts will appear here.");
         controls.addView(statusTextView);
-        controls.addView(usbStatusTextView);
         controls.addView(readoutTextView);
 
         setContentView(root);
@@ -321,25 +278,11 @@ public final class MainActivity extends Activity {
     }
 
     private void wireUserInterfaceActions() {
-        AdapterView.OnItemSelectedListener recalculateListener = new AdapterView.OnItemSelectedListener() {
+        refractionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 updateAtmosphereFieldState();
                 calculateAndRenderAlignment();
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-                // No-op.
-            }
-        };
-        refractionSpinner.setOnItemSelectedListener(recalculateListener);
-
-        cameraSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                // Selection is applied only when the user taps Open camera; this avoids
-                // changing the active camera while scrolling through the list.
             }
 
             @Override
@@ -351,33 +294,19 @@ public final class MainActivity extends Activity {
         updateAtmosphereFieldState();
     }
 
-    private void refreshCameraList() {
-        List<CameraDeviceInfo> devices = camera2PreviewController.listCameraDevices();
-        cameraAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, devices);
-        cameraAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        cameraSpinner.setAdapter(cameraAdapter);
-        if (devices.isEmpty()) {
-            cameraStatusTextView.setText("No Camera2 devices found.");
-        } else {
-            cameraStatusTextView.setText("Found " + devices.size() + " Camera2 device(s). External devices are listed first when present.");
-        }
-    }
-
-    private void openSelectedCamera() {
+    private void requestCameraPermissionThenOpenUvc() {
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION_FOR_UVC);
             return;
         }
-        CameraDeviceInfo selectedCamera = (CameraDeviceInfo) cameraSpinner.getSelectedItem();
-        if (selectedCamera == null) {
-            cameraStatusTextView.setText("No Camera2 camera selected.");
-            return;
-        }
-        camera2PreviewController.openCamera(selectedCamera.cameraId);
+        uvcPreviewController.requestPermissionAndOpenFirstCamera();
     }
 
-    private void refreshUsbStatus() {
-        usbStatusTextView.setText(usbUvcDeviceMonitor.describeConnectedUvcDevices());
+    private void refreshUvcStatus() {
+        if (uvcPreviewController == null) {
+            return;
+        }
+        uvcStatusTextView.setText(uvcPreviewController.describeConnectedUvcDevices());
     }
 
     private void requestLocationOrFillFromLastKnownProvider() {
