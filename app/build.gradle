@@ -10,8 +10,8 @@ android {
         applicationId 'com.dcf1007.androidpolaris'
         minSdk 23
         targetSdk 35
-        versionCode 4
-        versionName '0.2.2'
+        versionCode 5
+        versionName '0.2.3'
     }
 
     compileOptions {
@@ -36,4 +36,10 @@ dependencies {
         exclude group: 'com.gyf.immersionbar', module: 'immersionbar'
         exclude group: 'com.zlc.glide', module: 'webpdecoder'
     }
+
+    // AUSBC 3.2.7 exposes USB permission callbacks through Serenegiant's
+    // USBMonitor.UsbControlBlock type. The high-level library is compiled against
+    // it, but the app also needs the type on its own compile classpath because
+    // UvcPreviewController implements IDeviceConnectCallBack directly.
+    implementation 'com.github.jiangdongguo.AndroidUSBCamera:libuvc:3.2.7'
 }
