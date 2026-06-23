@@ -28,8 +28,25 @@ public final class AlignmentResult {
 
     public final double polarisHourAngleHours;
     public final double polarisClockAngleDegrees;
+
+    /** Observed/topocentric Polaris RA after apparent-place and refraction correction. */
     public final double apparentRightAscensionRadians;
+
+    /** Observed/topocentric Polaris Dec after apparent-place and refraction correction. */
     public final double apparentDeclinationRadians;
+
+    /** Mean-of-date Polaris RA before nutation, aberration, and refraction. */
+    public final double meanRightAscensionRadians;
+
+    /** Mean-of-date Polaris Dec before nutation, aberration, and refraction. */
+    public final double meanDeclinationRadians;
+
+    /** Observed/topocentric Polaris RA after refraction, matching the sanitized HTML output. */
+    public final double observedRightAscensionRadians;
+
+    /** Observed/topocentric Polaris Dec after refraction, matching the sanitized HTML output. */
+    public final double observedDeclinationRadians;
+
     public final double trueAltitudeRadians;
     public final double trueAzimuthRadians;
     public final double refractionArcMinutes;
@@ -39,6 +56,7 @@ public final class AlignmentResult {
     public final double radiusReticlePixels;
     public final double nominalRingRadiusReticlePixels;
     public final double pixelPerTangentRadian;
+    public final double observedSeparationArcMinutes;
     public final String warningText;
 
     public AlignmentResult(
@@ -61,6 +79,10 @@ public final class AlignmentResult {
             double polarisClockAngleDegrees,
             double apparentRightAscensionRadians,
             double apparentDeclinationRadians,
+            double meanRightAscensionRadians,
+            double meanDeclinationRadians,
+            double observedRightAscensionRadians,
+            double observedDeclinationRadians,
             double trueAltitudeRadians,
             double trueAzimuthRadians,
             double refractionArcMinutes,
@@ -70,6 +92,7 @@ public final class AlignmentResult {
             double radiusReticlePixels,
             double nominalRingRadiusReticlePixels,
             double pixelPerTangentRadian,
+            double observedSeparationArcMinutes,
             String warningText
     ) {
         this.julianDateUtc = julianDateUtc;
@@ -91,6 +114,10 @@ public final class AlignmentResult {
         this.polarisClockAngleDegrees = polarisClockAngleDegrees;
         this.apparentRightAscensionRadians = apparentRightAscensionRadians;
         this.apparentDeclinationRadians = apparentDeclinationRadians;
+        this.meanRightAscensionRadians = meanRightAscensionRadians;
+        this.meanDeclinationRadians = meanDeclinationRadians;
+        this.observedRightAscensionRadians = observedRightAscensionRadians;
+        this.observedDeclinationRadians = observedDeclinationRadians;
         this.trueAltitudeRadians = trueAltitudeRadians;
         this.trueAzimuthRadians = trueAzimuthRadians;
         this.refractionArcMinutes = refractionArcMinutes;
@@ -100,6 +127,7 @@ public final class AlignmentResult {
         this.radiusReticlePixels = radiusReticlePixels;
         this.nominalRingRadiusReticlePixels = nominalRingRadiusReticlePixels;
         this.pixelPerTangentRadian = pixelPerTangentRadian;
+        this.observedSeparationArcMinutes = observedSeparationArcMinutes;
         this.warningText = warningText == null ? "" : warningText;
     }
 }
