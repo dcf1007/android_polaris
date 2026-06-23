@@ -12,12 +12,19 @@ import java.util.List;
  *
  * <p>This class keeps the native app aligned with the sanitized browser model. UTC is used as the
  * offline UT1 proxy for sidereal time, TT is estimated through a built-in ΔT polynomial for
- * apparent-place terms, and all output coordinates remain in the original SVG viewBox.</p>
+ * apparent-place terms, and all output coordinates remain in the native reticle design-space.</p>
  */
 public final class PolarisAlignmentCalculator {
-    public static final double SVG_VIEWBOX_WIDTH = 1501.99;
-    public static final double SVG_VIEWBOX_HEIGHT = 1498.19;
+    /** Width of the native reticle design coordinate system. */
+    public static final double RETICLE_VIEWBOX_WIDTH = 1501.99;
+
+    /** Height of the native reticle design coordinate system. */
+    public static final double RETICLE_VIEWBOX_HEIGHT = 1498.19;
+
+    /** Reticle NCP/epicentre x coordinate in design-space pixels. */
     public static final double RETICLE_CENTER_X = 746.01;
+
+    /** Reticle NCP/epicentre y coordinate in design-space pixels. */
     public static final double RETICLE_CENTER_Y = 746.43;
 
     private static final int[] MONTH_DAYS = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -30,8 +37,8 @@ public final class PolarisAlignmentCalculator {
     private static final double POLARIS_PM_RA_STAR_MAS_PER_YEAR = 44.48;
     private static final double POLARIS_PM_DEC_MAS_PER_YEAR = -11.85;
     private static final double REFERENCE_RING_YEAR = 2020.0;
-    private static final double REFERENCE_RING_RADIUS_SVG_PX = 342.5;
-    private static final double RING_RADIUS_SVG_PX_PER_YEAR = -2.0;
+    private static final double REFERENCE_RING_RADIUS_RETICLE_PX = 342.5;
+    private static final double RING_RADIUS_RETICLE_PX_PER_YEAR = -2.0;
 
     public AlignmentResult calculate(AlignmentInput input) {
         validateInput(input);
@@ -54,7 +61,7 @@ public final class PolarisAlignmentCalculator {
         double calculatedTargetHourAngleHours = calculatedTargetHourAngleDegrees / 15.0;
         double activeHourAngleDegrees = input.lockReticleToZeroHourAngle ? 0.0 : calculatedTargetHourAngleDegrees;
         double activeHourAngleHours = activeHourAngleDegrees / 15.0;
-        double activeHourAngleDisplayAngleDegrees = hourAngleDegreesToSvgDisplayAngle(activeHourAngleDegrees);
+        double activeHourAngleDisplayAngleDegrees = hourAngleDegreesToReticleDisplayAngle(activeHourAngleDegrees);
 
         int activeOffsetMonth = input.lockReticleToZeroHourAngle ? DEFAULT_ZERO_HA_MONTH : input.offsetMonth;
         int activeOffsetDay = input.lockReticleToZeroHourAngle ? DEFAULT_ZERO_HA_DAY : input.offsetDay;
@@ -70,18 +77,18 @@ public final class PolarisAlignmentCalculator {
         double observedDeclinationRadians = apparentPlace.apparentDeclinationRadians + refractionCorrection.radians;
 
         // Tangent-plane radial scale. The printed year ring supplies the pixel scale; tan(theta)
-        // projects the observed polar distance into the reticle plane.
-        double nominalRingRadiusSvgPx = printedYearRingRadiusSvgPx(decimalYearUtc);
+        // projects the observed polar distance into the native reticle plane.
+        double nominalRingRadiusReticlePx = printedYearRingRadiusReticlePx(decimalYearUtc);
         double meanPolarDistanceRadians = Math.PI / 2.0 - apparentPlace.meanDeclinationRadians;
         double observedPolarDistanceRadians = Math.max(0.0, Math.PI / 2.0 - observedDeclinationRadians);
-        double pixelPerTangentRadian = nominalRingRadiusSvgPx / Math.tan(meanPolarDistanceRadians);
-        double radiusSvgPx = Math.tan(observedPolarDistanceRadians) * pixelPerTangentRadian;
+        double pixelPerTangentRadian = nominalRingRadiusReticlePx / Math.tan(meanPolarDistanceRadians);
+        double radiusReticlePx = Math.tan(observedPolarDistanceRadians) * pixelPerTangentRadian;
 
         // Browser/Sky-Watcher reticle convention: Polaris marker angle = 180° - apparent HA.
         double polarisClockAngleDegrees = AstroMath.normalizeDegrees(180.0 - polarisHourAngleHours * 15.0);
         double polarisClockAngleRadians = polarisClockAngleDegrees * AstroMath.DEG_TO_RAD;
-        double markerSvgX = RETICLE_CENTER_X + radiusSvgPx * Math.sin(polarisClockAngleRadians);
-        double markerSvgY = RETICLE_CENTER_Y - radiusSvgPx * Math.cos(polarisClockAngleRadians);
+        double markerReticleX = RETICLE_CENTER_X + radiusReticlePx * Math.sin(polarisClockAngleRadians);
+        double markerReticleY = RETICLE_CENTER_Y - radiusReticlePx * Math.cos(polarisClockAngleRadians);
 
         List<String> warnings = new ArrayList<>();
         if (input.latitudeDegrees < 0.0) warnings.add("Polaris/NCP alignment is normally not usable from the southern hemisphere.");
@@ -113,10 +120,10 @@ public final class PolarisAlignmentCalculator {
                 trueHorizontalCoordinates.azimuthRadians,
                 refractionCorrection.radians * AstroMath.RAD_TO_DEG * 60.0,
                 refractionCorrection.description,
-                markerSvgX,
-                markerSvgY,
-                radiusSvgPx,
-                nominalRingRadiusSvgPx,
+                markerReticleX,
+                markerReticleY,
+                radiusReticlePx,
+                nominalRingRadiusReticlePx,
                 pixelPerTangentRadian,
                 joinWarnings(warnings)
         );
@@ -235,8 +242,8 @@ public final class PolarisAlignmentCalculator {
         return 1013.25 * Math.pow(1.0 - 2.25577e-5 * clampedElevation, 5.25588);
     }
 
-    private static double printedYearRingRadiusSvgPx(double decimalYearUtc) {
-        return REFERENCE_RING_RADIUS_SVG_PX + (decimalYearUtc - REFERENCE_RING_YEAR) * RING_RADIUS_SVG_PX_PER_YEAR;
+    private static double printedYearRingRadiusReticlePx(double decimalYearUtc) {
+        return REFERENCE_RING_RADIUS_RETICLE_PX + (decimalYearUtc - REFERENCE_RING_YEAR) * RING_RADIUS_RETICLE_PX_PER_YEAR;
     }
 
     private static int monthDayToOrdinal(int month, int day) {
@@ -264,7 +271,7 @@ public final class PolarisAlignmentCalculator {
         return normalized < 0.0 ? normalized + 365.0 : normalized;
     }
 
-    private static double hourAngleDegreesToSvgDisplayAngle(double hourAngleDegrees) {
+    private static double hourAngleDegreesToReticleDisplayAngle(double hourAngleDegrees) {
         return AstroMath.normalizeDegrees(-hourAngleDegrees);
     }
 
