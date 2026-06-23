@@ -2,15 +2,14 @@
 
 ## Scope implemented
 
-Refactored the accepted Polaris alignment webpage concept into a native Android project using Java and Camera2.
+Refactored the accepted Polaris alignment webpage concept into a native Android project using Java and a USB OTG / UVC camera backend.
 
 Implemented:
 
 - Native Android single-activity app.
-- Camera2 camera enumeration, camera permission handling, and live preview.
-- Camera2 external-camera detection for USB/UVC cameras exposed by Android as external cameras.
-- USB Host UVC device detection and permission request workflow.
-- Native reticle overlay drawn over the camera preview.
+- USB OTG / UVC preview through `AndroidUSBCamera/libausbc` 3.3.3.
+- Android USB Host permission workflow for the connected UVC device.
+- Native reticle overlay drawn over the UVC preview.
 - Offline Polaris alignment calculation ported from the sanitized web implementation.
 - Fixed Bennett refraction as the default.
 - ΔT / TT separation retained:
@@ -30,26 +29,24 @@ The GitHub Actions workflow uses a conservative Android build stack for CI relia
 
 The source code does not require API 36/37-specific behavior, so compile/target SDK 35 is sufficient for this testing APK and avoids depending on the newest SDK packages being available in the CI runner.
 
-## Deliberately not implemented
+## UVC-only design
 
-- No browser-view wrapper.
-- No third-party UVC native driver.
-- No CameraX.
-- No SOFA/ERFA kernel.
-- No IERS data download or embedded EOP table.
-- No SA-console or compatibility placement mode.
+The active preview path is:
 
-## UVC compatibility design
+```text
+USB OTG UVC camera
+→ Android USB Host permission
+→ AUSBC / libuvc preview backend
+→ native TextureView preview
+→ native reticle overlay
+```
 
-Android USB cameras are not uniformly exposed to apps. This project supports the reliable native path first: Camera2. If an OTG/UVC camera appears as `LENS_FACING_EXTERNAL`, the app can use it directly through Camera2 preview.
-
-For raw USB Video Class devices, the app detects the device and requests USB permission. Raw streaming is intentionally isolated from the rest of the app because it requires a UVC streaming implementation, usually native/libuvc-based. This separation prevents the astronomy and Camera2 code from being coupled to a specific third-party UVC library.
+Camera2 enumeration and built-in phone camera preview are not part of the active app flow. The app is aimed at the USB polar-scope camera, because that is the hardware that matters for alignment testing.
 
 ## Code organization
 
-- `MainActivity`: UI and lifecycle orchestration only.
-- `Camera2PreviewController`: Camera2-specific lifecycle and preview code.
-- `UsbUvcDeviceMonitor`: USB-host device enumeration and permission handling.
+- `MainActivity`: UI, permissions, live clock, and UVC-controller wiring.
+- `UvcPreviewController`: USB Host permission, AUSBC device callbacks, and UVC preview lifecycle.
 - `PolarisAlignmentCalculator`: all alignment math.
 - `ReticleOverlayView`: all drawing in a verified SVG coordinate system.
 - `model`: immutable calculation input and output types.
@@ -57,9 +54,8 @@ For raw USB Video Class devices, the app detects the device and requests USB per
 
 ## Validation performed locally
 
-- Checked for duplicate helper/class declarations in generated source.
-- Checked for duplicate XML resource files in the generated project layout.
-- Checked for placeholder markers: none used for required behavior.
-- Checked that Camera2 and USB Host classes are separated.
+- Checked that the active Activity imports and uses `UvcPreviewController`, not a Camera2 preview controller.
+- Kept astronomy code and camera code separated.
+- Kept the verified reticle center and ring geometry unchanged.
 
-A full Gradle build was not run in this sandbox because the environment does not have internet access to download the Android Gradle Plugin and SDK packages. The GitHub workflow is provided to run the build in GitHub Actions.
+A full Gradle build was not run in this sandbox because the environment does not have internet access to download the Android Gradle Plugin, SDK packages, and JitPack dependencies. The GitHub workflow is provided to run the build in GitHub Actions.
