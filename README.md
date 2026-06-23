@@ -27,7 +27,7 @@ USB OTG UVC camera
 → native reticle overlay
 ```
 
-The UVC backend is based on `com.github.jiangdongguo.AndroidUSBCamera:libausbc:3.3.3`.
+The UVC backend is based on `com.github.jiangdongguo.AndroidUSBCamera:libausbc:3.2.7`. Version `3.2.7` is pinned because the newer `3.3.3` JitPack artifact resolved `libausbc` but failed to resolve its transitive `libuvc` module in GitHub Actions.
 
 ## Build locally
 
