@@ -1,34 +1,33 @@
 # Android Polaris
 
-Native Android/Camera2 refactor of the Polaris polar-alignment page for Star Adventurer-style polar-scope work.
+Native Android USB OTG / UVC refactor of the Polaris polar-alignment page for Star Adventurer-style polar-scope work.
 
 ## What the app does
 
-- Draws a native reticle overlay over a live camera preview.
+- Draws a native reticle overlay over a live USB UVC camera preview.
+- Uses `AndroidUSBCamera/libausbc` for USB camera preview.
 - Computes Polaris as an apparent/topocentric polar-scope target using the accepted offline model from the web implementation.
 - Keeps the verified SVG geometry as the coordinate reference:
   - viewBox: `1501.99 × 1498.19`
   - NCP/epicentre/crosshair center: `(746.01, 746.43)`
   - 2012/2020/2028 year-ring radii: `358.5`, `342.5`, `326.5` SVG px
-- Uses Camera2 for preview.
-- Detects USB OTG UVC devices through Android USB Host APIs.
 - Builds a debug APK through GitHub Actions.
 
-## Camera and USB/UVC support
+## Camera support
 
-The app has two camera-related layers:
+This version is **USB OTG / UVC only**. Built-in phone cameras are not listed or opened.
 
-1. **Camera2 preview layer**
-   - Used for built-in cameras.
-   - Used for USB/OTG/UVC cameras when the Android device exposes the UVC camera as a Camera2 external camera.
-   - External Camera2 entries are listed first in the camera selector.
+The preview path is:
 
-2. **USB Host UVC detection layer**
-   - Enumerates USB Video Class devices.
-   - Requests Android USB permission for detected raw UVC devices.
-   - Reports VID/PID/interface information.
+```text
+USB OTG UVC camera
+→ Android USB Host permission
+→ AUSBC / libuvc preview backend
+→ native TextureView preview
+→ native reticle overlay
+```
 
-Important limitation: if a phone sees an OTG camera as raw USB only and does not expose it through Camera2, a native UVC streaming driver is required for live preview. This project deliberately avoids bundling a third-party/native UVC driver so the code remains dependency-free and auditable. The abstraction is separated so a libuvc backend can be added later without changing the astronomy engine.
+The UVC backend is based on `com.github.jiangdongguo.AndroidUSBCamera:libausbc:3.3.3`.
 
 ## Build locally
 
@@ -62,11 +61,10 @@ android-polaris-debug-apk
 
 ```text
 app/src/main/java/com/dcf1007/androidpolaris/
-  MainActivity.java                       UI, permissions, live clock, wiring
+  MainActivity.java                       UI, permissions, live clock, UVC wiring
   astro/AstroMath.java                    Unit conversion, Julian date, ΔT helpers
   astro/PolarisAlignmentCalculator.java   Offline apparent/topocentric Polaris model
-  camera/Camera2PreviewController.java    Camera2 enumeration/open/preview lifecycle
-  camera/UsbUvcDeviceMonitor.java         USB Host UVC detection and permission
+  camera/UvcPreviewController.java        USB Host permission and AUSBC/libuvc preview lifecycle
   model/*.java                            Immutable input/result/refraction models
   util/UiFormatting.java                  UI formatting only
   view/ReticleOverlayView.java            Native reticle and Polaris marker drawing
