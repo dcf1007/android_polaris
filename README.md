@@ -32,7 +32,7 @@ Important limitation: if a phone sees an OTG camera as raw USB only and does not
 
 ## Build locally
 
-Install Android SDK platform 37, Build Tools 36.0.0, JDK 17, and Gradle 9.4.1. Then run:
+Install Android SDK platform 35, Build Tools 34.0.0, JDK 17, and Gradle 8.9. Then run:
 
 ```bash
 gradle --no-daemon assembleDebug
