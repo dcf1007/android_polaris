@@ -11,6 +11,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // AndroidUSBCamera/libausbc is published through JitPack.
+        maven { url 'https://jitpack.io' }
     }
 }
 
