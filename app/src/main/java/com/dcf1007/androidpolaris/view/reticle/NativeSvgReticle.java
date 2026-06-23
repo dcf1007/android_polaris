@@ -23,6 +23,12 @@ import java.util.Locale;
  * SVG rendering libraries while still preserving the original SVG coordinate system and grouping logic.</p>
  */
 public final class NativeSvgReticle {
+    /** Text id used by the latest SVG for the active hour-angle value. */
+    public static final String ID_HOUR_ANGLE_VALUE_TEXT = "ha_x2F_value";
+
+    /** Text id used by the latest SVG for the fixed 0h date value. */
+    public static final String ID_ZERO_HOUR_DATE_TEXT = "date_x2F_value";
+
     private NativeSvgReticle() {}
 
     public interface ReticleNode {
@@ -248,10 +254,10 @@ public final class NativeSvgReticle {
 
         private String getRenderedText(RenderContext context) {
             if (context.result == null) return originalText;
-            if ("month_x2F_day".equals(id)) {
+            if (ID_HOUR_ANGLE_VALUE_TEXT.equals(id)) {
                 return UiFormatting.formatHours(context.result.activeHourAngleHours);
             }
-            if ("month_x2F_day1".equals(id)) {
+            if (ID_ZERO_HOUR_DATE_TEXT.equals(id)) {
                 return String.format(Locale.US, "%02d/%02d", context.result.zeroHourDateDay, context.result.zeroHourDateMonth);
             }
             return originalText;
