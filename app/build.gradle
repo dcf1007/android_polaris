@@ -9,12 +9,9 @@ android {
     defaultConfig {
         applicationId 'com.dcf1007.androidpolaris'
         minSdk 23
-        // AUSBC 3.2.7 contains older USB-monitor internals; target SDK 33 keeps
-        // Android's receiver and USB behavior compatible while still allowing the
-        // app to compile with the current Android 35 SDK.
         targetSdk 33
-        versionCode 18
-        versionName '0.2.16'
+        versionCode 19
+        versionName '0.2.17'
     }
 
     compileOptions {
@@ -25,9 +22,6 @@ android {
 
 dependencies {
     implementation("com.github.jiangdongguo.AndroidUSBCamera:libausbc:3.2.7") {
-        // The app uses AUSBC's UVC preview backend only. These transitive modules are
-        // UI/image helpers from the demo/library stack and were not needed for runtime;
-        // excluding them also avoids JitPack 401 resolution failures in GitHub Actions.
         exclude group: "com.gyf.immersionbar", module: "immersionbar"
         exclude group: "com.zlc.glide", module: "webpdecoder"
     }
