@@ -22,10 +22,26 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** UVC-only preview controller. */
+/**
+ * UVC-only preview controller.
+ *
+ * <p>The preview is deliberately treated like the browser page's video element:
+ * the parent video layer controls position, size, opacity and rotation, while
+ * this controller controls only the equivalent of object-fit inside that layer.</p>
+ */
 public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
     private static final long SURFACE_RECHECK_DELAY_MS = 250L;
+
+    /**
+     * Default UVC polar-scope camera frame aspect.
+     *
+     * <p>Most inexpensive OTG/UVC eyepiece cameras negotiate 640×480 or another
+     * 4:3 mode. The fit menu needs a stable source aspect to behave like CSS
+     * object-fit. Width/height sliders remain available for manual calibration
+     * when a specific camera negotiates a different stream shape.</p>
+     */
+    private static final float DEFAULT_PREVIEW_SOURCE_ASPECT = 4.0f / 3.0f;
 
     public enum PreviewFitMode {
         COVER,
@@ -58,15 +74,31 @@ public final class UvcPreviewController {
         this.listener = listener;
         this.previewView = new AspectRatioTextureView(context);
         configurePreviewSurfaceCallbacks();
+
         this.previewContainer.removeAllViews();
         this.previewContainer.addView(previewView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                Gravity.CENTER
-        ));
+                Gravity.CENTER));
         this.previewContainer.setVisibility(View.VISIBLE);
         this.previewContainer.setClipChildren(true);
         this.previewContainer.setClipToPadding(true);
+        this.previewContainer.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override public void onLayoutChange(
+                    View view,
+                    int left,
+                    int top,
+                    int right,
+                    int bottom,
+                    int oldLeft,
+                    int oldTop,
+                    int oldRight,
+                    int oldBottom) {
+                if ((right - left) != (oldRight - oldLeft) || (bottom - top) != (oldBottom - oldTop)) {
+                    applyPreviewFitMode();
+                }
+            }
+        });
         this.previewContainer.requestLayout();
         this.previewView.requestLayout();
         this.uvcClient = new MultiCameraClient(context, createDeviceConnectionCallback());
@@ -167,8 +199,16 @@ public final class UvcPreviewController {
     /**
      * Sets the preview equivalent of the browser video element's object-fit value.
      *
-     * <p>The surrounding Android video layer controls position, dimensions and rotation. This
-     * method only controls how the UVC TextureView is scaled inside that layer.</p>
+     * <p>The previous implementation resized the TextureView to MATCH_PARENT and
+     * then calculated cover/contain from that same filled size, so cover and
+     * contain often became identical. This implementation changes the child view's
+     * measured rectangle itself, which gives the same visual model as CSS:</p>
+     *
+     * <ul>
+     *   <li>COVER: preserve source aspect and cover the layer, cropping overflow.</li>
+     *   <li>CONTAIN: preserve source aspect and fit entirely inside the layer.</li>
+     *   <li>STRETCH: ignore source aspect and fill the layer.</li>
+     * </ul>
      */
     public void setPreviewFitMode(PreviewFitMode fitMode) {
         previewFitMode = fitMode == null ? PreviewFitMode.COVER : fitMode;
@@ -302,33 +342,47 @@ public final class UvcPreviewController {
             return;
         }
 
+        int targetWidth = containerWidth;
+        int targetHeight = containerHeight;
+        if (previewFitMode != PreviewFitMode.STRETCH) {
+            float containerAspect = containerWidth / (float) containerHeight;
+            boolean containerIsWiderThanSource = containerAspect > DEFAULT_PREVIEW_SOURCE_ASPECT;
+
+            if (previewFitMode == PreviewFitMode.CONTAIN) {
+                if (containerIsWiderThanSource) {
+                    targetHeight = containerHeight;
+                    targetWidth = Math.round(targetHeight * DEFAULT_PREVIEW_SOURCE_ASPECT);
+                } else {
+                    targetWidth = containerWidth;
+                    targetHeight = Math.round(targetWidth / DEFAULT_PREVIEW_SOURCE_ASPECT);
+                }
+            } else {
+                if (containerIsWiderThanSource) {
+                    targetWidth = containerWidth;
+                    targetHeight = Math.round(targetWidth / DEFAULT_PREVIEW_SOURCE_ASPECT);
+                } else {
+                    targetHeight = containerHeight;
+                    targetWidth = Math.round(targetHeight * DEFAULT_PREVIEW_SOURCE_ASPECT);
+                }
+            }
+        }
+
+        targetWidth = Math.max(1, targetWidth);
+        targetHeight = Math.max(1, targetHeight);
         FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) previewView.getLayoutParams();
-        params.width = FrameLayout.LayoutParams.MATCH_PARENT;
-        params.height = FrameLayout.LayoutParams.MATCH_PARENT;
-        params.gravity = Gravity.CENTER;
-        previewView.setLayoutParams(params);
-
-        previewView.setPivotX(containerWidth / 2.0f);
-        previewView.setPivotY(containerHeight / 2.0f);
-        if (previewFitMode == PreviewFitMode.STRETCH) {
-            previewView.setScaleX(1.0f);
-            previewView.setScaleY(1.0f);
-            return;
+        if (params.width != targetWidth || params.height != targetHeight || params.gravity != Gravity.CENTER) {
+            params.width = targetWidth;
+            params.height = targetHeight;
+            params.gravity = Gravity.CENTER;
+            previewView.setLayoutParams(params);
         }
-
-        int viewWidth = previewView.getWidth();
-        int viewHeight = previewView.getHeight();
-        if (viewWidth <= 0 || viewHeight <= 0) {
-            return;
-        }
-
-        float scaleX = containerWidth / (float) viewWidth;
-        float scaleY = containerHeight / (float) viewHeight;
-        float uniformScale = previewFitMode == PreviewFitMode.COVER
-                ? Math.max(scaleX, scaleY)
-                : Math.min(scaleX, scaleY);
-        previewView.setScaleX(uniformScale);
-        previewView.setScaleY(uniformScale);
+        previewView.setTranslationX(0.0f);
+        previewView.setTranslationY(0.0f);
+        previewView.setScaleX(1.0f);
+        previewView.setScaleY(1.0f);
+        previewView.setPivotX(targetWidth / 2.0f);
+        previewView.setPivotY(targetHeight / 2.0f);
+        previewContainer.invalidate();
     }
 
     private void openCameraWhenPreviewSurfaceIsReady(MultiCameraClient.Camera camera, UsbDevice device) {
