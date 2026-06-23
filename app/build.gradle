@@ -10,8 +10,8 @@ android {
         applicationId 'com.dcf1007.androidpolaris'
         minSdk 23
         targetSdk 35
-        versionCode 2
-        versionName '0.2.0'
+        versionCode 3
+        versionName '0.2.1'
     }
 
     compileOptions {
@@ -21,8 +21,9 @@ android {
 }
 
 dependencies {
-    // Native USB OTG / UVC preview backend. This is the same class of backend used
-    // by dedicated USB-camera applications when Android does not expose the camera
-    // through Camera2 as an external camera.
-    implementation 'com.github.jiangdongguo.AndroidUSBCamera:libausbc:3.3.3'
+    // Native USB OTG / UVC preview backend. Version 3.2.7 is pinned instead of
+    // 3.3.3 because the 3.3.3 JitPack POM resolves libausbc but fails to resolve
+    // its transitive libuvc module on GitHub Actions. The upstream changelog marks
+    // 3.2.7 as the Android-S-compatible direct-dependency release line.
+    implementation 'com.github.jiangdongguo.AndroidUSBCamera:libausbc:3.2.7'
 }
