@@ -42,11 +42,11 @@ import java.util.Locale;
 /**
  * Main single-activity Android app.
  *
- * <p>The launch path is deliberately kept free of AUSBC/libuvc initialization. The app now
- * starts using only Android framework classes, draws the reticle overlay, and performs the
- * Polaris calculation before any USB camera backend is touched. The UVC backend is created
- * lazily only after the user presses "Open USB UVC camera". This keeps a USB-library or
- * device-specific failure from crashing the whole app at startup.</p>
+ * <p>The launch path is deliberately kept free of AUSBC/libuvc initialization. The app starts
+ * using only Android framework classes, draws the reticle overlay, and performs the Polaris
+ * calculation before any USB camera backend is touched. The UVC backend is created lazily only
+ * after the user presses "Open USB UVC camera". This keeps a USB-library or device-specific
+ * failure from crashing the whole app at startup.</p>
  *
  * <p>The camera path is USB OTG / UVC only. Camera2 and built-in phone-camera workflows are
  * intentionally absent.</p>
@@ -55,6 +55,16 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_CAMERA_PERMISSION_FOR_UVC = 1001;
     private static final int REQUEST_LOCATION_PERMISSION = 1002;
     private static final int USB_VIDEO_CLASS = 14;
+
+    /**
+     * The camera preview must have a real, non-zero size before Android creates the TextureView
+     * surface required by AUSBC/libuvc. A previous weighted layout allowed the controls ScrollView
+     * to consume the full screen on some devices, collapsing the preview to zero height and leaving
+     * the app stuck at "waiting for preview surface". These bounds keep the preview visible while
+     * still leaving room for scrollable controls below it.
+     */
+    private static final int PREVIEW_PANEL_MIN_HEIGHT_DP = 240;
+    private static final int PREVIEW_PANEL_PREFERRED_HEIGHT_DP = 320;
 
     private final Handler liveClockHandler = new Handler(Looper.getMainLooper());
     private final PolarisAlignmentCalculator alignmentCalculator = new PolarisAlignmentCalculator();
@@ -147,18 +157,20 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(android.graphics.Color.BLACK);
 
+        int previewPanelHeightPx = previewPanelHeightPx();
         FrameLayout previewFrame = new FrameLayout(this);
         previewFrame.setBackgroundColor(android.graphics.Color.BLACK);
+        previewFrame.setMinimumHeight(previewPanelHeightPx);
         root.addView(previewFrame, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1.0f
+                previewPanelHeightPx
         ));
 
         // The UVC preview view is inserted here lazily by UvcPreviewController.
         // This container is an Android framework class, so app startup does not load AUSBC.
         uvcPreviewContainer = new FrameLayout(this);
         uvcPreviewContainer.setBackgroundColor(android.graphics.Color.BLACK);
+        uvcPreviewContainer.setMinimumHeight(previewPanelHeightPx);
         previewFrame.addView(uvcPreviewContainer, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
@@ -174,7 +186,8 @@ public final class MainActivity extends Activity {
         scrollView.setFillViewport(false);
         root.addView(scrollView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+                0,
+                1.0f
         ));
 
         LinearLayout controls = new LinearLayout(this);
@@ -184,7 +197,7 @@ public final class MainActivity extends Activity {
         scrollView.addView(controls);
 
         controls.addView(label("Android Polaris — USB UVC polar alignment", 20, true));
-        controls.addView(note("UVC-only build. App startup is independent of the UVC library; the backend is loaded only when Open USB UVC camera is pressed."));
+        controls.addView(note("UVC-only build. The black panel above is the live USB camera/reticle area. The UVC backend loads only when Open USB UVC camera is pressed."));
 
         LinearLayout uvcActionRow = horizontalRow();
         uvcActionRow.addView(button("Open USB UVC camera", new View.OnClickListener() {
@@ -568,6 +581,14 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
         params.setMargins(dp(2), dp(2), dp(2), dp(2));
         return params;
+    }
+
+    private int previewPanelHeightPx() {
+        int screenHeightPx = getResources().getDisplayMetrics().heightPixels;
+        int minimumHeightPx = dp(PREVIEW_PANEL_MIN_HEIGHT_DP);
+        int preferredHeightPx = dp(PREVIEW_PANEL_PREFERRED_HEIGHT_DP);
+        int maximumHeightPx = Math.max(minimumHeightPx, screenHeightPx / 2);
+        return Math.max(minimumHeightPx, Math.min(preferredHeightPx, maximumHeightPx));
     }
 
     private int dp(int value) {
