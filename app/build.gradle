@@ -13,8 +13,8 @@ android {
         // Android's receiver and USB behavior compatible while still allowing the
         // app to compile with the current Android 35 SDK.
         targetSdk 33
-        versionCode 15
-        versionName '0.2.13'
+        versionCode 16
+        versionName '0.2.14'
     }
 
     compileOptions {
