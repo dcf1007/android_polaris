@@ -9,9 +9,16 @@ android {
     defaultConfig {
         applicationId 'com.dcf1007.androidpolaris'
         minSdk 23
-        targetSdk 35
-        versionCode 5
-        versionName '0.2.3'
+
+        // The APK is compiled with SDK 35, but the runtime target is deliberately
+        // kept at 33 while using AUSBC 3.2.7. That UVC library contains an older
+        // USB monitor implementation; targeting Android 14/15 behavior can make
+        // its dynamic receiver registration fail before preview starts. This is a
+        // test/field APK, not a Play Store release build.
+        targetSdk 33
+
+        versionCode 6
+        versionName '0.2.4'
     }
 
     compileOptions {
