@@ -1,11 +1,12 @@
 package com.dcf1007.androidpolaris.model;
 
 /**
- * Calculation result in the original SVG coordinate system.
+ * Calculation result in the native reticle coordinate system.
  *
- * <p>Keeping all reticle positions in SVG-space lets the Android overlay drive the
- * original SVG directly: viewBox 1501.99 x 1498.19, NCP centre at (746.01, 746.43),
- * and Star Adventurer date/time/polar-scope groups updated by transform.</p>
+ * <p>The Android overlay no longer ships, parses, or edits SVG. The coordinate system is still the
+ * same 1501.99 x 1498.19 design-space used by the original source drawing, with the NCP centre at
+ * (746.01, 746.43). All dynamic overlay positions are expressed in that reticle design-space so the
+ * native Canvas renderer can place Polaris, labels, and rotating groups precisely.</p>
  */
 public final class AlignmentResult {
     public final double julianDateUtc;
@@ -33,10 +34,10 @@ public final class AlignmentResult {
     public final double trueAzimuthRadians;
     public final double refractionArcMinutes;
     public final String refractionDescription;
-    public final double markerSvgX;
-    public final double markerSvgY;
-    public final double radiusSvgPixels;
-    public final double nominalRingRadiusSvgPixels;
+    public final double markerReticleX;
+    public final double markerReticleY;
+    public final double radiusReticlePixels;
+    public final double nominalRingRadiusReticlePixels;
     public final double pixelPerTangentRadian;
     public final String warningText;
 
@@ -64,10 +65,10 @@ public final class AlignmentResult {
             double trueAzimuthRadians,
             double refractionArcMinutes,
             String refractionDescription,
-            double markerSvgX,
-            double markerSvgY,
-            double radiusSvgPixels,
-            double nominalRingRadiusSvgPixels,
+            double markerReticleX,
+            double markerReticleY,
+            double radiusReticlePixels,
+            double nominalRingRadiusReticlePixels,
             double pixelPerTangentRadian,
             String warningText
     ) {
@@ -94,10 +95,10 @@ public final class AlignmentResult {
         this.trueAzimuthRadians = trueAzimuthRadians;
         this.refractionArcMinutes = refractionArcMinutes;
         this.refractionDescription = refractionDescription;
-        this.markerSvgX = markerSvgX;
-        this.markerSvgY = markerSvgY;
-        this.radiusSvgPixels = radiusSvgPixels;
-        this.nominalRingRadiusSvgPixels = nominalRingRadiusSvgPixels;
+        this.markerReticleX = markerReticleX;
+        this.markerReticleY = markerReticleY;
+        this.radiusReticlePixels = radiusReticlePixels;
+        this.nominalRingRadiusReticlePixels = nominalRingRadiusReticlePixels;
         this.pixelPerTangentRadian = pixelPerTangentRadian;
         this.warningText = warningText == null ? "" : warningText;
     }
