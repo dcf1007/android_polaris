@@ -120,13 +120,13 @@ public final class NativeReticleGeometry {
     private static void buildHourAngleIndicator(NativeSvgReticle.Group indicator) {
         indicator.line("", 746.01f, 144.70f, 746.01f, 68.73f, DATE_YELLOW, 2f, null);
         indicator.path("", "M746.01,77.73l-15,28.97h30l-15-28.97Z", DATE_YELLOW, Color.TRANSPARENT, 0f, null);
-        indicator.text("month_x2F_day", 757.62f, 98.88f, "hh:mm:ss", DATE_YELLOW, 18f, true);
+        indicator.text(NativeSvgReticle.ID_HOUR_ANGLE_VALUE_TEXT, 757.62f, 98.88f, "hh:mm:ss", DATE_YELLOW, 18f, true);
     }
 
     private static void buildZeroHourIndicator(NativeSvgReticle.Group indicator) {
         indicator.line("", 746.01f, 144.70f, 746.01f, 68.73f, WHITE, 2f, null);
         indicator.path("", "M746.01,135.67l-15-28.97h30l-15,28.97Z", WHITE, Color.TRANSPARENT, 0f, null);
-        indicator.text("month_x2F_day1", 757.62f, 125.52f, "DD/MM", WHITE, 18f, true);
+        indicator.text(NativeSvgReticle.ID_ZERO_HOUR_DATE_TEXT, 757.62f, 125.52f, "DD/MM", WHITE, 18f, true);
     }
 
     private static void buildPolarisIndicator(NativeSvgReticle.Group polaris) {
