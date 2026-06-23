@@ -2,8 +2,6 @@ package com.dcf1007.androidpolaris;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -52,10 +50,10 @@ import java.util.Locale;
 /**
  * Main single-activity Android app.
  *
- * <p>The UI is intentionally built as a native Android equivalent of the original dark browser
- * interface: a square camera stage with the reticle overlay, a small stage badge, rounded control
- * panels, two-column action rows, labelled values, visibility controls, and status/readout blocks.
- * The implementation remains UVC-only and does not use WebView, SVG rendering, or Camera2.</p>
+ * <p>The UI is a native Android equivalent of the dark browser interface: a fixed reticle
+ * stage with camera preview underneath, rounded control panels, labelled rows, sliders,
+ * status/readout blocks, and UVC-only camera handling. There is no WebView, SVG renderer,
+ * Camera2 preview path, or runtime vector asset.</p>
  */
 public final class MainActivity extends Activity {
     private static final int REQUEST_CAMERA_PERMISSION_FOR_UVC = 1001;
@@ -63,6 +61,11 @@ public final class MainActivity extends Activity {
     private static final int USB_VIDEO_CLASS = 14;
 
     private static final String SETTINGS_NAME = "android_polaris_overlay_settings";
+    private static final String FIT_COVER = "Cover / crop";
+    private static final String FIT_CONTAIN = "Contain / no crop";
+    private static final String FIT_STRETCH = "Stretch";
+
+    private static final String[] VIDEO_FIT_ENTRIES = {FIT_COVER, FIT_CONTAIN, FIT_STRETCH};
     private static final String[] MONTH_NAMES = {
             "January", "February", "March", "April", "May", "June",
             "July", "August", "September", "October", "November", "December"
@@ -129,7 +132,6 @@ public final class MainActivity extends Activity {
     private TextView uvcStatusTextView;
     private TextView readoutTextView;
     private TextView debugLogTextView;
-    private TextView settingsOutTextView;
 
     private UvcPreviewController uvcPreviewController;
     private boolean isBuildingOrInitializingUi;
@@ -142,7 +144,7 @@ public final class MainActivity extends Activity {
     private float videoRotationDegrees;
     private float reticleOpacityPercent = 100.0f;
     private float videoOpacityPercent = 100.0f;
-    private String videoFitMode = "Native UVC aspect";
+    private String videoFitMode = FIT_COVER;
     private final StringBuilder debugLogBuilder = new StringBuilder();
 
     private final Runnable liveClockRunnable = new Runnable() {
@@ -215,7 +217,6 @@ public final class MainActivity extends Activity {
         root.setBackgroundColor(COLOR_BACKGROUND);
         root.setPadding(dp(12), 0, dp(12), 0);
 
-        // Header mirrors the browser page: compact title plus muted instruction line.
         TextView title = createText("Camera + native reticle overlay aligner", 18, COLOR_TEXT, true);
         title.setPadding(dp(2), dp(12), dp(2), dp(2));
         root.addView(title, matchWrapParams());
@@ -226,7 +227,6 @@ public final class MainActivity extends Activity {
         hint.setPadding(dp(2), 0, dp(2), dp(10));
         root.addView(hint, matchWrapParams());
 
-        // The stage wrapper uses the same rounded black card treatment as the HTML version.
         FrameLayout stageWrapper = new FrameLayout(this);
         stageWrapper.setPadding(dp(10), dp(10), dp(10), dp(10));
         stageWrapper.setBackground(roundedBackground(COLOR_STAGE_WRAP, COLOR_BORDER, 16));
@@ -236,24 +236,29 @@ public final class MainActivity extends Activity {
 
         stageFrame = new ReticleAspectStageLayout(this);
         stageFrame.setBackgroundColor(Color.BLACK);
-        stageFrame.setClipToOutline(false);
+        stageFrame.setClipChildren(true);
+        stageFrame.setClipToPadding(true);
         stageWrapper.addView(stageFrame, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
 
-        // Video layer is transformed by the alignment sliders. The UVC preview itself keeps its
-        // native negotiated aspect; this layer only positions/scales/rotates the preview relative to
-        // the fixed reticle coordinate system.
+        // This layer corresponds to the HTML #videoLayer: its width, height, centre offset,
+        // and rotation are controlled directly by the alignment sliders.
         videoLayer = new FrameLayout(this);
         videoLayer.setBackgroundColor(Color.BLACK);
+        videoLayer.setClipChildren(true);
+        videoLayer.setClipToPadding(true);
         stageFrame.addView(videoLayer, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 Gravity.CENTER));
 
+        // Mirroring is applied to this child so the layer position/rotation math remains stable.
         uvcPreviewContainer = new FrameLayout(this);
         uvcPreviewContainer.setBackgroundColor(Color.BLACK);
+        uvcPreviewContainer.setClipChildren(true);
+        uvcPreviewContainer.setClipToPadding(true);
         videoLayer.addView(uvcPreviewContainer, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -321,19 +326,13 @@ public final class MainActivity extends Activity {
         row1.addView(statusButton, weightParams());
         panel.addView(row1);
 
-        LinearLayout row2 = horizontalRow();
-        Button stopButton = createButton("Stop camera", false, true,
-                new View.OnClickListener() { @Override public void onClick(View view) { stopUvcCamera(); } });
-        Button copyButton = createButton("Copy settings", false, false,
-                new View.OnClickListener() { @Override public void onClick(View view) { copyCurrentSettingsToClipboard(); } });
-        row2.addView(stopButton, weightParams());
-        row2.addView(copyButton, weightParams());
-        panel.addView(row2);
+        panel.addView(createButton("Stop camera", false, true,
+                new View.OnClickListener() { @Override public void onClick(View view) { stopUvcCamera(); } }));
 
         LinearLayout fitRow = horizontalRow();
         LinearLayout fitColumn = verticalColumn();
         fitColumn.addView(smallLabel("Video fit"));
-        videoFitSpinner = createSpinner(new String[]{"Native UVC aspect", "Cover / crop", "Contain / no crop", "Fill / stretch"});
+        videoFitSpinner = createSpinner(VIDEO_FIT_ENTRIES);
         fitColumn.addView(videoFitSpinner, matchWrapParams());
         fitRow.addView(fitColumn, weightParams());
 
@@ -358,20 +357,12 @@ public final class MainActivity extends Activity {
         videoHeightSeekBar = addSlider(panel, "Video height", "100%", videoHeightValueTextView = new TextView(this));
         videoRotationSeekBar = addSlider(panel, "Rotation", "0°", videoRotationValueTextView = new TextView(this));
 
+        panel.addView(createButton("Reset alignment", false, true,
+                new View.OnClickListener() { @Override public void onClick(View view) { resetVideoOverlayAlignment(); } }));
+
         panel.addView(sectionTitle("Visibility"));
         reticleOpacitySeekBar = addSlider(panel, "Overlay opacity", "100%", reticleOpacityValueTextView = new TextView(this));
         videoOpacitySeekBar = addSlider(panel, "Video opacity", "100%", videoOpacityValueTextView = new TextView(this));
-
-        LinearLayout actionRow = horizontalRow();
-        actionRow.addView(createButton("Reset alignment", false, true,
-                new View.OnClickListener() { @Override public void onClick(View view) { resetVideoOverlayAlignment(); } }), weightParams());
-        actionRow.addView(createButton("Apply", false, false,
-                new View.OnClickListener() { @Override public void onClick(View view) { applyVideoOverlayControls(true); } }), weightParams());
-        panel.addView(actionRow);
-
-        settingsOutTextView = createTextArea("", true);
-        settingsOutTextView.setVisibility(View.GONE);
-        panel.addView(settingsOutTextView, matchWrapParams());
     }
 
     private void populateAstronomyPanel(LinearLayout panel) {
@@ -490,7 +481,7 @@ public final class MainActivity extends Activity {
         });
         videoFitSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                videoFitMode = String.valueOf(parent.getItemAtPosition(position));
+                videoFitMode = sanitizeVideoFitMode(String.valueOf(parent.getItemAtPosition(position)));
                 applyVideoOverlayControls(true);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
@@ -509,7 +500,7 @@ public final class MainActivity extends Activity {
         lockVideoScaleCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
                 if (isChecked) {
-                    videoHeightSeekBar.setProgress(videoWidthSeekBar.getProgress());
+                    syncVideoSizeSliders(videoWidthSeekBar);
                 }
                 applyVideoOverlayControls(true);
             }
@@ -532,11 +523,7 @@ public final class MainActivity extends Activity {
         SeekBar.OnSeekBarChangeListener sliderListener = new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (!fromUser || isApplyingOverlayControlState) return;
-                if (lockVideoScaleCheckBox.isChecked() && seekBar == videoWidthSeekBar) {
-                    videoHeightSeekBar.setProgress(videoWidthSeekBar.getProgress());
-                } else if (lockVideoScaleCheckBox.isChecked() && seekBar == videoHeightSeekBar) {
-                    videoWidthSeekBar.setProgress(videoHeightSeekBar.getProgress());
-                }
+                syncVideoSizeSliders(seekBar);
                 applyVideoOverlayControls(true);
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
@@ -592,6 +579,7 @@ public final class MainActivity extends Activity {
                     });
                 }
             });
+            uvcPreviewController.setPreviewFitMode(toPreviewFitMode(videoFitMode));
             return uvcPreviewController;
         } catch (Throwable throwable) {
             uvcPreviewController = null;
@@ -828,7 +816,10 @@ public final class MainActivity extends Activity {
         videoOpacityPercent = preferences.getFloat("videoOpacityPercent", 100.0f);
         boolean mirror = preferences.getBoolean("mirrorVideo", false);
         boolean lockScale = preferences.getBoolean("lockVideoScale", true);
-        videoFitMode = preferences.getString("videoFitMode", "Native UVC aspect");
+        videoFitMode = sanitizeVideoFitMode(preferences.getString("videoFitMode", FIT_COVER));
+        if (lockScale) {
+            videoHeightPercent = videoWidthPercent;
+        }
 
         isApplyingOverlayControlState = true;
         mirrorVideoCheckBox.setChecked(mirror);
@@ -871,37 +862,44 @@ public final class MainActivity extends Activity {
         videoRotationDegrees = rotationDegreesFromSeek(videoRotationSeekBar);
         reticleOpacityPercent = reticleOpacitySeekBar.getProgress();
         videoOpacityPercent = videoOpacitySeekBar.getProgress();
+        videoFitMode = sanitizeVideoFitMode(videoFitMode);
 
         updateSliderLabels();
-
-        float baseScaleX = videoWidthPercent / 100.0f;
-        float baseScaleY = videoHeightPercent / 100.0f;
-        if ("Fill / stretch".equals(videoFitMode)) {
-            // Intentionally allows non-uniform scaling only when explicitly requested.
-            videoLayer.setScaleX((mirrorVideoCheckBox.isChecked() ? -1.0f : 1.0f) * baseScaleX);
-            videoLayer.setScaleY(baseScaleY);
-        } else {
-            // Default/cover/contain modes preserve the camera surface's own aspect ratio.
-            float uniformScale = Math.min(baseScaleX, baseScaleY);
-            if ("Cover / crop".equals(videoFitMode)) {
-                uniformScale = Math.max(baseScaleX, baseScaleY);
-            }
-            videoLayer.setScaleX((mirrorVideoCheckBox.isChecked() ? -1.0f : 1.0f) * uniformScale);
-            videoLayer.setScaleY(uniformScale);
+        updateVideoLayerLayoutAndTransform();
+        if (uvcPreviewController != null) {
+            uvcPreviewController.setPreviewFitMode(toPreviewFitMode(videoFitMode));
         }
-        videoLayer.setRotation(videoRotationDegrees);
-        videoLayer.setAlpha(videoOpacityPercent / 100.0f);
-        reticleOverlayView.setAlpha(reticleOpacityPercent / 100.0f);
-        stageFrame.post(new Runnable() {
-            @Override public void run() {
-                videoLayer.setTranslationX(stageFrame.getWidth() * videoOffsetXPercent / 100.0f);
-                videoLayer.setTranslationY(stageFrame.getHeight() * videoOffsetYPercent / 100.0f);
-            }
-        });
 
         if (shouldSave) {
             saveOverlayControlSettings();
         }
+    }
+
+    private void updateVideoLayerLayoutAndTransform() {
+        if (stageFrame.getWidth() <= 0 || stageFrame.getHeight() <= 0) {
+            stageFrame.post(new Runnable() {
+                @Override public void run() { updateVideoLayerLayoutAndTransform(); }
+            });
+            return;
+        }
+
+        int layerWidth = Math.max(1, Math.round(stageFrame.getWidth() * videoWidthPercent / 100.0f));
+        int layerHeight = Math.max(1, Math.round(stageFrame.getHeight() * videoHeightPercent / 100.0f));
+        FrameLayout.LayoutParams layerParams = (FrameLayout.LayoutParams) videoLayer.getLayoutParams();
+        if (layerParams.width != layerWidth || layerParams.height != layerHeight || layerParams.gravity != Gravity.CENTER) {
+            layerParams.width = layerWidth;
+            layerParams.height = layerHeight;
+            layerParams.gravity = Gravity.CENTER;
+            videoLayer.setLayoutParams(layerParams);
+        }
+
+        videoLayer.setTranslationX(stageFrame.getWidth() * videoOffsetXPercent / 100.0f);
+        videoLayer.setTranslationY(stageFrame.getHeight() * videoOffsetYPercent / 100.0f);
+        videoLayer.setRotation(videoRotationDegrees);
+        videoLayer.setAlpha(videoOpacityPercent / 100.0f);
+        uvcPreviewContainer.setScaleX(mirrorVideoCheckBox.isChecked() ? -1.0f : 1.0f);
+        uvcPreviewContainer.setScaleY(1.0f);
+        reticleOverlayView.setAlpha(reticleOpacityPercent / 100.0f);
     }
 
     private void resetVideoOverlayAlignment() {
@@ -915,33 +913,21 @@ public final class MainActivity extends Activity {
         videoOpacitySeekBar.setProgress(100);
         mirrorVideoCheckBox.setChecked(false);
         lockVideoScaleCheckBox.setChecked(true);
-        selectSpinnerText(videoFitSpinner, "Native UVC aspect");
+        videoFitMode = FIT_COVER;
+        selectSpinnerText(videoFitSpinner, videoFitMode);
         isApplyingOverlayControlState = false;
         applyVideoOverlayControls(true);
         appendDebugLog("Video/overlay alignment reset.");
     }
 
-    private void copyCurrentSettingsToClipboard() {
-        String settings = "{\n"
-                + "  \"videoOffsetXPercent\": " + formatOneDecimal(videoOffsetXPercent) + ",\n"
-                + "  \"videoOffsetYPercent\": " + formatOneDecimal(videoOffsetYPercent) + ",\n"
-                + "  \"videoWidthPercent\": " + formatOneDecimal(videoWidthPercent) + ",\n"
-                + "  \"videoHeightPercent\": " + formatOneDecimal(videoHeightPercent) + ",\n"
-                + "  \"videoRotationDegrees\": " + formatOneDecimal(videoRotationDegrees) + ",\n"
-                + "  \"reticleOpacityPercent\": " + formatOneDecimal(reticleOpacityPercent) + ",\n"
-                + "  \"videoOpacityPercent\": " + formatOneDecimal(videoOpacityPercent) + ",\n"
-                + "  \"mirrorVideo\": " + mirrorVideoCheckBox.isChecked() + ",\n"
-                + "  \"lockVideoScale\": " + lockVideoScaleCheckBox.isChecked() + ",\n"
-                + "  \"fit\": \"" + videoFitMode + "\"\n"
-                + "}";
-        settingsOutTextView.setText(settings);
-        settingsOutTextView.setVisibility(View.VISIBLE);
-        ClipboardManager clipboardManager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        if (clipboardManager != null) {
-            clipboardManager.setPrimaryClip(ClipData.newPlainText("Android Polaris settings", settings));
-            setAlignmentStatus("Settings copied to clipboard.", COLOR_OK);
-        } else {
-            setAlignmentStatus("Settings shown below. Clipboard unavailable.", COLOR_WARN);
+    private void syncVideoSizeSliders(SeekBar changedSeekBar) {
+        if (!lockVideoScaleCheckBox.isChecked()) {
+            return;
+        }
+        if (changedSeekBar == videoWidthSeekBar) {
+            videoHeightSeekBar.setProgress(videoWidthSeekBar.getProgress());
+        } else if (changedSeekBar == videoHeightSeekBar) {
+            videoWidthSeekBar.setProgress(videoHeightSeekBar.getProgress());
         }
     }
 
@@ -1013,8 +999,26 @@ public final class MainActivity extends Activity {
         return String.format(Locale.US, "%02d/%02d", day, month);
     }
 
-    private static String formatOneDecimal(float value) {
-        return String.format(Locale.US, "%.1f", value);
+    private String sanitizeVideoFitMode(String rawMode) {
+        if (FIT_CONTAIN.equals(rawMode)) {
+            return FIT_CONTAIN;
+        }
+        if (FIT_STRETCH.equals(rawMode) || "Fill / stretch".equals(rawMode) || "fill".equals(rawMode)) {
+            return FIT_STRETCH;
+        }
+        // Old saved values such as "Native UVC aspect" collapse to the HTML default.
+        return FIT_COVER;
+    }
+
+    private UvcPreviewController.PreviewFitMode toPreviewFitMode(String mode) {
+        String cleanMode = sanitizeVideoFitMode(mode);
+        if (FIT_CONTAIN.equals(cleanMode)) {
+            return UvcPreviewController.PreviewFitMode.CONTAIN;
+        }
+        if (FIT_STRETCH.equals(cleanMode)) {
+            return UvcPreviewController.PreviewFitMode.STRETCH;
+        }
+        return UvcPreviewController.PreviewFitMode.COVER;
     }
 
     private int percentToSignedSeekProgress(float percent) {
@@ -1260,6 +1264,7 @@ public final class MainActivity extends Activity {
                 return;
             }
         }
+        spinner.setSelection(0);
     }
 
     private int dp(int value) {
