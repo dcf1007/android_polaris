@@ -3,14 +3,14 @@ package com.dcf1007.androidpolaris.view.reticle;
 import android.graphics.Color;
 
 /**
- * Full native Canvas geometry generated from all_together_v4.svg.
+ * Full native Canvas geometry generated from the v4 reticle source drawing.
  *
- * <p>The original SVG is not shipped or parsed at runtime. Every SVG primitive is
+ * <p>The original vector file is not shipped or parsed at runtime. Every source primitive is
  * represented as a native Canvas object in the same hierarchy and drawing order:
  * 49 groups, 484 lines, 7 circles, 2 paths and 54 text elements.</p>
  *
  * <p>Coordinate system: viewBox 0 0 1501.99 1498.19. NCP/epicentre:
- * (746.01, 746.43). Dynamic ids are preserved from SVG v4:</p>
+ * (746.01, 746.43). Dynamic ids are preserved from the v4 source:</p>
  * <ul>
  *   <li>ha_x2F_value - active HA label</li>
  *   <li>date_x2F_value - fixed 0h date label</li>
@@ -33,11 +33,11 @@ public final class NativeReticleGeometry {
 
     private NativeReticleGeometry() {}
 
-    public static NativeSvgReticle.Group createReticle() {
-        NativeSvgReticle.Group root = new NativeSvgReticle.Group("Layer_1");
-        NativeSvgReticle.Group g1 = root.group("Polar_Scope_Circle");
-        NativeSvgReticle.Group g2 = g1.group("_x35_deg_divisions");
-        NativeSvgReticle.Group g3 = g2.group("outer");
+    public static NativeCanvasReticle.Group createReticle() {
+        NativeCanvasReticle.Group root = new NativeCanvasReticle.Group("Layer_1");
+        NativeCanvasReticle.Group g1 = root.group("Polar_Scope_Circle");
+        NativeCanvasReticle.Group g2 = g1.group("_x35_deg_divisions");
+        NativeCanvasReticle.Group g3 = g2.group("outer");
         g3.line("", 746.01f, 387.93f, 746.01f, 349.93f, RED, 2f, null);
         g3.line("", 777.26f, 389.3f, 778.65f, 373.36f, RED, 2f, null);
         g3.line("", 808.26f, 393.38f, 811.04f, 377.62f, RED, 2f, null);
@@ -110,7 +110,7 @@ public final class NativeReticleGeometry {
         g3.line("", 653.22f, 400.15f, 649.08f, 384.69f, RED, 2f, null);
         g3.line("", 683.76f, 393.38f, 680.98f, 377.62f, RED, 2f, null);
         g3.line("", 714.77f, 389.3f, 713.37f, 373.36f, RED, 2f, null);
-        NativeSvgReticle.Group g4 = g2.group("inner");
+        NativeCanvasReticle.Group g4 = g2.group("inner");
         g4.line("", 746.01f, 419.93f, 746.01f, 454.93f, RED, 2f, null);
         g4.line("", 774.47f, 421.17f, 772.99f, 438.11f, RED, 2f, null);
         g4.line("", 802.71f, 424.89f, 799.76f, 441.63f, RED, 2f, null);
@@ -183,34 +183,34 @@ public final class NativeReticleGeometry {
         g4.line("", 661.51f, 431.06f, 665.91f, 447.48f, RED, 2f, null);
         g4.line("", 689.32f, 424.89f, 692.27f, 441.63f, RED, 2f, null);
         g4.line("", 717.56f, 421.17f, 719.04f, 438.11f, RED, 2f, null);
-        NativeSvgReticle.Group g5 = g1.group("_x32_032_x5F_ring");
+        NativeCanvasReticle.Group g5 = g1.group("_x32_032_x5F_ring");
         g5.line("", 731.51f, 427.93f, 760.51f, 427.93f, RED, 2f, null);
         g5.line("", 731.51f, 1064.93f, 760.51f, 1064.93f, RED, 2f, null);
         g5.line("", 427.51f, 731.93f, 427.51f, 760.93f, RED, 2f, null);
         g5.line("", 1064.51f, 731.93f, 1064.51f, 760.93f, RED, 2f, null);
         g1.circle("_x32_028_x5F_ring", 746.01f, 746.43f, 326.5f, TRANSPARENT, RED, 2f);
-        NativeSvgReticle.Group g6 = g1.group("_x32_024_x5F_ring");
+        NativeCanvasReticle.Group g6 = g1.group("_x32_024_x5F_ring");
         g6.line("", 731.51f, 411.68f, 760.51f, 411.68f, RED, 2f, null);
         g6.line("", 731.51f, 1080.68f, 760.51f, 1080.68f, RED, 2f, null);
         g6.line("", 411.51f, 731.68f, 411.51f, 760.68f, RED, 2f, null);
         g6.line("", 1080.51f, 731.68f, 1080.51f, 760.68f, RED, 2f, null);
         g1.circle("_x32_020_x5F_ring", 746.01f, 746.43f, 342.5f, TRANSPARENT, RED, 2f);
-        NativeSvgReticle.Group g7 = g1.group("_x32_016_x5F_ring");
+        NativeCanvasReticle.Group g7 = g1.group("_x32_016_x5F_ring");
         g7.line("", 731.51f, 395.93f, 760.51f, 395.93f, RED, 2f, null);
         g7.line("", 731.51f, 1096.93f, 760.51f, 1096.93f, RED, 2f, null);
         g7.line("", 395.51f, 731.93f, 395.51f, 760.93f, RED, 2f, null);
         g7.line("", 1096.51f, 731.93f, 1096.51f, 760.93f, RED, 2f, null);
         g1.circle("_x32_012_x5F_ring", 746.01f, 746.43f, 358.5f, TRANSPARENT, RED, 2f);
-        NativeSvgReticle.Group g8 = g1.group("cardinal_x5F_points");
+        NativeCanvasReticle.Group g8 = g1.group("cardinal_x5F_points");
         g8.line("", 746.01f, 326.43f, 746.01f, 1166.43f, RED, 2f, null);
         g8.line("", 326.01f, 746.43f, 1166.01f, 746.43f, RED, 2f, null);
         g8.text("", 736.22f, 322.68f, "0", RED, 35f, false);
         g8.text("", 1166.72f, 755.68f, "3", RED, 35f, false);
         g8.text("", 304.72f, 755.68f, "9", RED, 35f, false);
         g8.text("", 736.22f, 1197.68f, "6", RED, 35f, false);
-        NativeSvgReticle.Group g9 = root.group("Date_Graduation_Circle");
+        NativeCanvasReticle.Group g9 = root.group("Date_Graduation_Circle");
         g9.circle("", 746.01f, 746.43f, 590.76f, TRANSPARENT, DATE_RING, 2f);
-        NativeSvgReticle.Group g10 = g9.group("_x31_");
+        NativeCanvasReticle.Group g10 = g9.group("_x31_");
         g10.line("", 1249.48f, 480.28f, 1278.74f, 464.8f, DATE_DIM, 2f, null);
         g10.line("", 1258.34f, 497.77f, 1288.09f, 483.33f, DATE_DIM, 2f, null);
         g10.line("", 1266.59f, 515.54f, 1296.84f, 502.14f, DATE_DIM, 2f, null);
@@ -228,7 +228,7 @@ public final class NativeReticleGeometry {
         g10.line("", 1277.65f, 753.31f, 1381.62f, 754.63f, DATE_YELLOW, 2f, null);
         g10.text("", 1246.6f, 758.07f, "31", DATE_YELLOW, 20f, false);
         g10.text("", 1236.07f, 631.44f, "1", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g11 = g9.group("_x32_");
+        NativeCanvasReticle.Group g11 = g9.group("_x32_");
         g11.line("", 1314.87f, 773.39f, 1347.9f, 774.95f, DATE_DIM, 2f, null);
         g11.line("", 1313.59f, 792.96f, 1346.58f, 795.65f, DATE_DIM, 2f, null);
         g11.line("", 1311.65f, 812.45f, 1344.52f, 816.28f, DATE_DIM, 2f, null);
@@ -245,7 +245,7 @@ public final class NativeReticleGeometry {
         g11.line("", 1213.89f, 998.97f, 1305.39f, 1048.33f, DATE_YELLOW, 2f, null);
         g11.text("", 1185.11f, 994.99f, "28", DATE_YELLOW, 20f, false);
         g11.text("", 1236.07f, 891.42f, "2", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g12 = g9.group("_x33_");
+        NativeCanvasReticle.Group g12 = g9.group("_x33_");
         g12.line("", 1237.57f, 1034.01f, 1266.12f, 1050.72f, DATE_DIM, 2f, null);
         g12.line("", 1227.36f, 1050.77f, 1255.34f, 1068.44f, DATE_DIM, 2f, null);
         g12.line("", 1216.61f, 1067.14f, 1243.95f, 1085.76f, DATE_DIM, 2f, null);
@@ -263,7 +263,7 @@ public final class NativeReticleGeometry {
         g12.line("", 1020.38f, 1201.86f, 1074.05f, 1290.9f, DATE_YELLOW, 2f, null);
         g12.text("", 998.48f, 1190.67f, "31", DATE_YELLOW, 20f, false);
         g12.text("", 1109.65f, 1118.6f, "3", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g13 = g9.group("_x34_");
+        NativeCanvasReticle.Group g13 = g9.group("_x34_");
         g13.line("", 1022.94f, 1244.06f, 1039.03f, 1272.96f, DATE_DIM, 2f, null);
         g13.line("", 1005.64f, 1253.3f, 1020.72f, 1282.75f, DATE_DIM, 2f, null);
         g13.line("", 988.03f, 1261.93f, 1002.09f, 1291.89f, DATE_DIM, 2f, null);
@@ -281,7 +281,7 @@ public final class NativeReticleGeometry {
         g13.line("", 759.74f, 1277.95f, 762.41f, 1381.88f, DATE_YELLOW, 2f, null);
         g13.text("", 747.1f, 1264.04f, "30", DATE_YELLOW, 20f, false);
         g13.text("", 880.17f, 1258.21f, "4", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g14 = g9.group("_x35_");
+        NativeCanvasReticle.Group g14 = g9.group("_x35_");
         g14.line("", 741.1f, 1315.9f, 740.81f, 1348.98f, DATE_DIM, 2f, null);
         g14.line("", 721.51f, 1315.4f, 720.09f, 1348.46f, DATE_DIM, 2f, null);
         g14.line("", 701.94f, 1314.22f, 699.37f, 1347.21f, DATE_DIM, 2f, null);
@@ -299,7 +299,7 @@ public final class NativeReticleGeometry {
         g14.line("", 487.47f, 1211.03f, 436.9f, 1301.89f, DATE_YELLOW, 2f, null);
         g14.text("", 484.52f, 1199.51f, "31", DATE_YELLOW, 20f, false);
         g14.text("", 611.64f, 1263.98f, "5", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g15 = g9.group("_x36_");
+        NativeCanvasReticle.Group g15 = g9.group("_x36_");
         g15.line("", 452.12f, 1234.23f, 435.04f, 1262.57f, DATE_DIM, 2f, null);
         g15.line("", 435.51f, 1223.84f, 417.46f, 1251.55f, DATE_DIM, 2f, null);
         g15.line("", 419.25f, 1212.85f, 400.28f, 1239.95f, DATE_DIM, 2f, null);
@@ -317,7 +317,7 @@ public final class NativeReticleGeometry {
         g15.line("", 291.79f, 1022.77f, 202.96f, 1076.81f, DATE_YELLOW, 2f, null);
         g15.text("", 295.79f, 1017.93f, "30", DATE_YELLOW, 20f, false);
         g15.text("", 376.37f, 1134.39f, "6", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g16 = g9.group("_x37_");
+        NativeCanvasReticle.Group g16 = g9.group("_x37_");
         g16.line("", 249.58f, 1025.51f, 220.73f, 1041.72f, DATE_DIM, 2f, null);
         g16.line("", 240.27f, 1008.26f, 210.88f, 1023.45f, DATE_DIM, 2f, null);
         g16.line("", 231.55f, 990.67f, 201.66f, 1004.88f, DATE_DIM, 2f, null);
@@ -335,7 +335,7 @@ public final class NativeReticleGeometry {
         g16.line("", 214.38f, 753.31f, 110.4f, 754.63f, DATE_YELLOW, 2f, null);
         g16.text("", 221.14f, 758.07f, "31", DATE_YELLOW, 20f, false);
         g16.text("", 237.76f, 904.3f, "7", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g17 = g9.group("_x38_");
+        NativeCanvasReticle.Group g17 = g9.group("_x38_");
         g17.line("", 176.64f, 734.19f, 143.58f, 733.46f, DATE_DIM, 2f, null);
         g17.line("", 177.42f, 714.6f, 144.38f, 712.73f, DATE_DIM, 2f, null);
         g17.line("", 178.84f, 695.04f, 145.89f, 692.06f, DATE_DIM, 2f, null);
@@ -353,7 +353,7 @@ public final class NativeReticleGeometry {
         g17.line("", 284.79f, 481.91f, 194.6f, 430.19f, DATE_YELLOW, 2f, null);
         g17.text("", 289.05f, 496.32f, "31", DATE_YELLOW, 20f, false);
         g17.text("", 234.24f, 631.44f, "8", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g18 = g9.group("_x39_");
+        NativeCanvasReticle.Group g18 = g9.group("_x39_");
         g18.line("", 262.04f, 446.28f, 233.94f, 428.84f, DATE_DIM, 2f, null);
         g18.line("", 272.67f, 429.78f, 245.17f, 411.4f, DATE_DIM, 2f, null);
         g18.line("", 283.85f, 413.69f, 257f, 394.36f, DATE_DIM, 2f, null);
@@ -371,7 +371,7 @@ public final class NativeReticleGeometry {
         g18.line("", 475.56f, 288.69f, 422.68f, 199.15f, DATE_YELLOW, 2f, null);
         g18.text("", 473.04f, 309.97f, "30", DATE_YELLOW, 20f, false);
         g18.text("", 366.88f, 397.88f, "9", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g19 = g9.group("_x31_0");
+        NativeCanvasReticle.Group g19 = g9.group("_x31_0");
         g19.line("", 473.36f, 246.44f, 457.53f, 217.39f, DATE_DIM, 2f, null);
         g19.line("", 490.76f, 237.36f, 475.92f, 207.78f, DATE_DIM, 2f, null);
         g19.line("", 508.41f, 228.88f, 494.61f, 198.8f, DATE_DIM, 2f, null);
@@ -389,7 +389,7 @@ public final class NativeReticleGeometry {
         g19.line("", 746.01f, 214.75f, 746.01f, 110.77f, DATE_YELLOW, 2f, null);
         g19.text("", 733.87f, 238.65f, "31", DATE_YELLOW, 20f, false);
         g19.text("", 588.85f, 262.24f, "10", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g20 = g9.group("_x31_1");
+        NativeCanvasReticle.Group g20 = g9.group("_x31_1");
         g20.line("", 765.6f, 177.27f, 766.76f, 144.21f, DATE_DIM, 2f, null);
         g20.line("", 785.19f, 178.29f, 787.46f, 145.3f, DATE_DIM, 2f, null);
         g20.line("", 804.73f, 179.99f, 808.14f, 147.07f, DATE_DIM, 2f, null);
@@ -407,7 +407,7 @@ public final class NativeReticleGeometry {
         g20.line("", 1008.55f, 284.08f, 1059.87f, 193.67f, DATE_YELLOW, 2f, null);
         g20.text("", 987.07f, 305.53f, "30", DATE_YELLOW, 20f, false);
         g20.text("", 858.75f, 261.08f, "11", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g21 = g9.group("_x31_2");
+        NativeCanvasReticle.Group g21 = g9.group("_x31_2");
         g21.line("", 1044.09f, 261.18f, 1061.41f, 232.99f, DATE_DIM, 2f, null);
         g21.line("", 1060.63f, 271.72f, 1078.89f, 244.14f, DATE_DIM, 2f, null);
         g21.line("", 1076.77f, 282.85f, 1095.98f, 255.91f, DATE_DIM, 2f, null);
@@ -425,7 +425,7 @@ public final class NativeReticleGeometry {
         g21.line("", 1207.23f, 481.91f, 1297.4f, 430.19f, DATE_YELLOW, 2f, null);
         g21.text("", 1178.69f, 496.32f, "31", DATE_YELLOW, 20f, false);
         g21.text("", 1090.43f, 394.71f, "12", DATE_DIM, 35f, false);
-        NativeSvgReticle.Group g22 = root.group("Time_Graduation_Circle");
+        NativeCanvasReticle.Group g22 = root.group("Time_Graduation_Circle");
         g22.circle("", 746.01f, 746.43f, 694.73f, TRANSPARENT, WHITE, 2f);
         g22.line("", 746.01f, 89.51f, 746.01f, 30.43f, WHITE, 2f, null);
         g22.line("", 775.6f, 68.88f, 776.83f, 40.54f, GREY, 2f, null);
@@ -595,15 +595,15 @@ public final class NativeReticleGeometry {
         g22.text("", 1252.69f, 233.1f, "21h", WHITE, 20f, false);
         g22.text("", 1099.99f, 115.94f, "22h", WHITE, 20f, false);
         g22.text("", 922.17f, 42.28f, "23h", WHITE, 20f, false);
-        NativeSvgReticle.Group g23 = root.group("HA_x5F_indicator");
+        NativeCanvasReticle.Group g23 = root.group("HA_x5F_indicator");
         g23.line("", 746.01f, 144.7f, 746.01f, 68.73f, DATE_YELLOW, 2f, null);
         g23.path("", "M746.01,77.73l-15,28.97h30l-15-28.97Z", DATE_YELLOW, TRANSPARENT, 0f, null);
         g23.text("ha_x2F_value", 757.62f, 98.88f, "hh:mm:ss", DATE_YELLOW, 18f, true);
-        NativeSvgReticle.Group g24 = root.group("_x30_h_x5F_indicator");
+        NativeCanvasReticle.Group g24 = root.group("_x30_h_x5F_indicator");
         g24.line("", 746.01f, 144.7f, 746.01f, 68.73f, WHITE, 2f, null);
         g24.path("", "M746.01,135.67l-15-28.97h30l-15,28.97Z", WHITE, TRANSPARENT, 0f, null);
         g24.text("date_x2F_value", 757.62f, 125.52f, "DD/MM", WHITE, 18f, true);
-        NativeSvgReticle.Group g25 = root.group("polaris_x5F_indicator");
+        NativeCanvasReticle.Group g25 = root.group("polaris_x5F_indicator");
         g25.line("", 746.01f, 746.43f, 683.52f, 1069.41f, POLARIS_PINK, 2f, new float[]{7f, 8f});
         g25.circle("epicentrum_x2F_NCP", 746.01f, 746.43f, 4.5f, NCP_RED, TRANSPARENT, 0f);
         g25.circle("polaris_x5F_position", 683.52f, 1069.41f, 7.5f, POLARIS_PINK, TRANSPARENT, 0f);
