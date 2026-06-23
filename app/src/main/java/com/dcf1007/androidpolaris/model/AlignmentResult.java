@@ -3,10 +3,10 @@ package com.dcf1007.androidpolaris.model;
 /**
  * Calculation result in the native reticle coordinate system.
  *
- * <p>The Android overlay no longer ships, parses, or edits SVG. The coordinate system is still the
- * same 1501.99 x 1498.19 design-space used by the original source drawing, with the NCP centre at
- * (746.01, 746.43). All dynamic overlay positions are expressed in that reticle design-space so the
- * native Canvas renderer can place Polaris, labels, and rotating groups precisely.</p>
+ * <p>The Android overlay no longer ships, parses, or edits vector assets at runtime. The coordinate
+ * system is the 1501.99 x 1498.19 reticle design-space, with the NCP centre at (746.01, 746.43).
+ * All dynamic overlay positions are expressed in that reticle design-space so the native Canvas
+ * renderer can place Polaris, labels, and rotating groups precisely.</p>
  */
 public final class AlignmentResult {
     public final double julianDateUtc;
