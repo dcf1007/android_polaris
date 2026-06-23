@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
+import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -26,6 +27,12 @@ public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
     private static final long SURFACE_RECHECK_DELAY_MS = 250L;
 
+    public enum PreviewFitMode {
+        COVER,
+        CONTAIN,
+        STRETCH
+    }
+
     public interface Listener {
         void onUvcStatusChanged(String statusText);
     }
@@ -43,6 +50,7 @@ public final class UvcPreviewController {
     private boolean isOpenAttemptScheduled;
     private UsbDevice pendingOpenDevice;
     private MultiCameraClient.Camera activeUvcCamera;
+    private PreviewFitMode previewFitMode = PreviewFitMode.COVER;
 
     public UvcPreviewController(Context context, FrameLayout previewContainer, Listener listener) {
         this.context = context;
@@ -53,9 +61,12 @@ public final class UvcPreviewController {
         this.previewContainer.removeAllViews();
         this.previewContainer.addView(previewView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER
         ));
         this.previewContainer.setVisibility(View.VISIBLE);
+        this.previewContainer.setClipChildren(true);
+        this.previewContainer.setClipToPadding(true);
         this.previewContainer.requestLayout();
         this.previewView.requestLayout();
         this.uvcClient = new MultiCameraClient(context, createDeviceConnectionCallback());
@@ -153,6 +164,17 @@ public final class UvcPreviewController {
         isOpenAttemptScheduled = false;
     }
 
+    /**
+     * Sets the preview equivalent of the browser video element's object-fit value.
+     *
+     * <p>The surrounding Android video layer controls position, dimensions and rotation. This
+     * method only controls how the UVC TextureView is scaled inside that layer.</p>
+     */
+    public void setPreviewFitMode(PreviewFitMode fitMode) {
+        previewFitMode = fitMode == null ? PreviewFitMode.COVER : fitMode;
+        applyPreviewFitMode();
+    }
+
     private IDeviceConnectCallBack createDeviceConnectionCallback() {
         return new IDeviceConnectCallBack() {
             @Override
@@ -224,6 +246,7 @@ public final class UvcPreviewController {
             @Override
             public void onCameraState(MultiCameraClient.Camera camera, ICameraStateCallBack.State state, String message) {
                 if (state == ICameraStateCallBack.State.OPENED) {
+                    applyPreviewFitMode();
                     notifyStatus("UVC preview opened. Use the pink Polaris target relative to the reticle NCP/crosshair.");
                 } else if (state == ICameraStateCallBack.State.CLOSED) {
                     notifyStatus("UVC preview closed.");
@@ -240,6 +263,7 @@ public final class UvcPreviewController {
             @Override
             public void onSurfaceTextureAvailable(SurfaceTexture surfaceTexture, int width, int height) {
                 isPreviewSurfaceAvailable = true;
+                applyPreviewFitMode();
                 notifyStatus("Preview surface ready: " + width + "×" + height + ".");
                 if (activeUvcCamera != null && pendingOpenDevice != null) {
                     openCameraWhenPreviewSurfaceIsReady(activeUvcCamera, pendingOpenDevice);
@@ -248,7 +272,7 @@ public final class UvcPreviewController {
 
             @Override
             public void onSurfaceTextureSizeChanged(SurfaceTexture surfaceTexture, int width, int height) {
-                // AspectRatioTextureView keeps the selected stream proportional.
+                applyPreviewFitMode();
             }
 
             @Override
@@ -265,6 +289,48 @@ public final class UvcPreviewController {
         });
     }
 
+    private void applyPreviewFitMode() {
+        previewView.post(new Runnable() {
+            @Override public void run() { applyPreviewFitModeNow(); }
+        });
+    }
+
+    private void applyPreviewFitModeNow() {
+        int containerWidth = previewContainer.getWidth();
+        int containerHeight = previewContainer.getHeight();
+        if (containerWidth <= 0 || containerHeight <= 0) {
+            return;
+        }
+
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) previewView.getLayoutParams();
+        params.width = FrameLayout.LayoutParams.MATCH_PARENT;
+        params.height = FrameLayout.LayoutParams.MATCH_PARENT;
+        params.gravity = Gravity.CENTER;
+        previewView.setLayoutParams(params);
+
+        previewView.setPivotX(containerWidth / 2.0f);
+        previewView.setPivotY(containerHeight / 2.0f);
+        if (previewFitMode == PreviewFitMode.STRETCH) {
+            previewView.setScaleX(1.0f);
+            previewView.setScaleY(1.0f);
+            return;
+        }
+
+        int viewWidth = previewView.getWidth();
+        int viewHeight = previewView.getHeight();
+        if (viewWidth <= 0 || viewHeight <= 0) {
+            return;
+        }
+
+        float scaleX = containerWidth / (float) viewWidth;
+        float scaleY = containerHeight / (float) viewHeight;
+        float uniformScale = previewFitMode == PreviewFitMode.COVER
+                ? Math.max(scaleX, scaleY)
+                : Math.min(scaleX, scaleY);
+        previewView.setScaleX(uniformScale);
+        previewView.setScaleY(uniformScale);
+    }
+
     private void openCameraWhenPreviewSurfaceIsReady(MultiCameraClient.Camera camera, UsbDevice device) {
         refreshPreviewSurfaceAvailability();
         if (!isPreviewSurfaceAvailable) {
@@ -276,6 +342,7 @@ public final class UvcPreviewController {
         }
         try {
             camera.openCamera(previewView, createPreviewRequest());
+            applyPreviewFitMode();
             notifyStatus("Opening UVC preview for " + describeDeviceBrief(device) + "…");
         } catch (Throwable throwable) {
             notifyStatus("Failed to open UVC preview: " + describeThrowable(throwable));
@@ -291,6 +358,7 @@ public final class UvcPreviewController {
             @Override
             public void run() {
                 refreshPreviewSurfaceAvailability();
+                applyPreviewFitMode();
                 if (isPreviewSurfaceAvailable) {
                     notifyStatus("Preview surface ready after " + reason + ".");
                     if (activeUvcCamera != null && pendingOpenDevice != null) {
@@ -311,6 +379,7 @@ public final class UvcPreviewController {
             public void run() {
                 isOpenAttemptScheduled = false;
                 refreshPreviewSurfaceAvailability();
+                applyPreviewFitMode();
                 if (isPreviewSurfaceAvailable) {
                     openCameraWhenPreviewSurfaceIsReady(camera, device);
                 } else {
