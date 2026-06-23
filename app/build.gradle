@@ -17,8 +17,8 @@ android {
         // test/field APK, not a Play Store release build.
         targetSdk 33
 
-        versionCode 7
-        versionName '0.2.5'
+        versionCode 8
+        versionName '0.2.6'
     }
 
     compileOptions {
