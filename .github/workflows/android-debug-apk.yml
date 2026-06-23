@@ -27,12 +27,12 @@ jobs:
 
       - name: Install required Android SDK packages
         run: |
-          sdkmanager --install "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+          sdkmanager --install "platforms;android-35" "build-tools;34.0.0" "platform-tools"
 
-      - name: Set up Gradle 9.4.1
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.4.1'
+          gradle-version: '8.9'
 
       - name: Assemble debug APK
         run: gradle --no-daemon assembleDebug
