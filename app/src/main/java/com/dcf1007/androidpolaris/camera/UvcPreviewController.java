@@ -10,6 +10,8 @@ import android.graphics.Paint;
 import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
@@ -22,24 +24,19 @@ import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
-import com.jiangdg.ausbc.MultiCameraClient;
-import com.jiangdg.ausbc.camera.bean.CameraRequest;
-import com.jiangdg.ausbc.callback.ICameraStateCallBack;
-import com.jiangdg.ausbc.callback.IDeviceConnectCallBack;
-import com.jiangdg.ausbc.widget.AspectRatioTextureView;
-import com.serenegiant.usb.USBMonitor;
+import com.jiangdg.usb.USBMonitor;
+import com.jiangdg.utils.Size;
+import com.jiangdg.uvc.UVCCamera;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+/** Direct libuvc preview and camera-control backend. No AUSBC wrapper is used. */
 public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
-    private static final int CAMERA_EFFECT_FILTER_CLASSIFY_ID = 1;
     private static final long SURFACE_RECHECK_DELAY_MS = 250L;
     private static final String SETTINGS = "android_polaris_uvc_camera_controls";
     private static final float DEFAULT_PREVIEW_SOURCE_ASPECT = 4.0f / 3.0f;
@@ -48,19 +45,23 @@ public final class UvcPreviewController {
     public interface Listener { void onUvcStatusChanged(String statusText); }
 
     private final Context context;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final FrameLayout previewContainer;
-    private final AspectRatioTextureView previewView;
+    private final TextureView previewView;
     private final Listener listener;
-    private final MultiCameraClient uvcClient;
+    private final USBMonitor usbMonitor;
     private final Map<Integer, UsbDevice> detectedUvcDevicesById = new LinkedHashMap<>();
-    private final Map<Integer, MultiCameraClient.Camera> uvcCamerasByDeviceId = new LinkedHashMap<>();
 
     private boolean isUsbMonitorRegistered;
     private boolean isPreviewSurfaceAvailable;
     private boolean isOpenAttemptScheduled;
     private UsbDevice pendingOpenDevice;
-    private MultiCameraClient.Camera activeUvcCamera;
+    private USBMonitor.UsbControlBlock activeControlBlock;
+    private UVCCamera activeCamera;
     private PreviewFitMode previewFitMode = PreviewFitMode.COVER;
+    private int activePreviewWidth = 0;
+    private int activePreviewHeight = 0;
+    private int activePreviewFormat = UVCCamera.FRAME_FORMAT_MJPEG;
 
     private LinearLayout controlsPanel;
     private TextView controlStatusTextView;
@@ -76,26 +77,31 @@ public final class UvcPreviewController {
     private CheckBox blackWhiteCheckBox;
     private boolean controlsCollapsed;
     private boolean loadingControls;
+
     private int brightnessValue = 50;
     private int contrastValue = 50;
     private int gainValue = 0;
     private int exposureValue = 50;
     private boolean autoExposure = true;
     private boolean blackWhite;
-    private Object blackWhiteEffect;
-    private UvcExposureBridge exposureBridge;
+    private boolean brightnessSupported;
+    private boolean contrastSupported;
+    private boolean gainSupported;
     private boolean exposureSupported;
     private boolean autoExposureSupported;
+    private UvcExposureBridge exposureBridge;
 
     public UvcPreviewController(Context context, FrameLayout previewContainer, Listener listener) {
         this.context = context;
         this.previewContainer = previewContainer;
         this.listener = listener;
-        this.previewView = new AspectRatioTextureView(context);
+        this.previewView = new TextureView(context);
         configurePreviewSurfaceCallbacks();
         previewContainer.removeAllViews();
         previewContainer.addView(previewView, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER));
         previewContainer.setVisibility(View.VISIBLE);
         previewContainer.setClipChildren(true);
         previewContainer.setClipToPadding(true);
@@ -104,7 +110,7 @@ public final class UvcPreviewController {
                 if ((r - l) != (orr - ol) || (b - t) != (ob - ot)) applyPreviewFitMode();
             }
         });
-        this.uvcClient = new MultiCameraClient(context, createDeviceConnectionCallback());
+        usbMonitor = new USBMonitor(context, createUsbListener());
         buildControlsPanel();
         loadControlSettings();
         scheduleSurfaceAvailabilityRecheck("initial preview view attach");
@@ -113,14 +119,14 @@ public final class UvcPreviewController {
     public boolean register() {
         if (isUsbMonitorRegistered) return true;
         try {
-            uvcClient.register();
+            usbMonitor.register();
             isUsbMonitorRegistered = true;
             refreshDetectedDeviceCacheFromUsbHost();
-            notifyStatus("UVC monitor registered. Tap Open USB UVC camera if permission is not requested automatically.");
+            notifyStatus("Direct libuvc monitor registered. Tap Open USB UVC camera if permission is not requested automatically.");
             return true;
         } catch (Throwable throwable) {
             isUsbMonitorRegistered = false;
-            notifyStatus("UVC monitor registration failed: " + describeThrowable(throwable));
+            notifyStatus("Direct libuvc monitor registration failed: " + describeThrowable(throwable));
             return false;
         }
     }
@@ -128,18 +134,17 @@ public final class UvcPreviewController {
     public void unregister() {
         closeActiveCamera();
         if (!isUsbMonitorRegistered) return;
-        try { uvcClient.unRegister(); }
-        catch (Throwable throwable) { notifyStatus("UVC monitor unregister warning: " + describeThrowable(throwable)); }
+        try { usbMonitor.unregister(); }
+        catch (Throwable throwable) { notifyStatus("USB monitor unregister warning: " + describeThrowable(throwable)); }
         finally { isUsbMonitorRegistered = false; }
     }
 
     public void destroy() {
         closeActiveCamera();
         removeControlsPanel();
-        uvcCamerasByDeviceId.clear();
         detectedUvcDevicesById.clear();
-        try { uvcClient.destroy(); }
-        catch (Throwable throwable) { notifyStatus("UVC destroy warning: " + describeThrowable(throwable)); }
+        try { usbMonitor.destroy(); }
+        catch (Throwable throwable) { notifyStatus("USB monitor destroy warning: " + describeThrowable(throwable)); }
         previewContainer.removeAllViews();
     }
 
@@ -154,9 +159,8 @@ public final class UvcPreviewController {
         pendingOpenDevice = firstDevice;
         notifyStatus("Requesting USB permission for " + describeDeviceBrief(firstDevice) + "…");
         try {
-            if (!uvcClient.requestPermission(firstDevice)) {
-                notifyStatus("USB permission request could not start. Reconnect the camera and try again.");
-            }
+            boolean failed = usbMonitor.requestPermission(firstDevice);
+            if (failed) notifyStatus("USB permission request could not start. Reconnect the camera and try again.");
         } catch (Throwable throwable) {
             notifyStatus("USB permission request failed: " + describeThrowable(throwable));
         }
@@ -168,19 +172,31 @@ public final class UvcPreviewController {
         StringBuilder builder = new StringBuilder();
         builder.append(detectedUvcDevicesById.size()).append(" raw UVC device(s) detected:\n");
         for (UsbDevice device : detectedUvcDevicesById.values()) builder.append(describeDeviceLong(device)).append('\n');
-        builder.append("Preview source: USB OTG UVC backend only. Exposure is accessed through the lower-level libuvc UVCCamera bridge when the device advertises AE_ABS support.");
+        builder.append("Preview source: direct libuvc/UVCCamera. AUSBC wrapper is not used. ");
+        if (activeCamera != null) {
+            builder.append("Active preview: ").append(activePreviewWidth).append('×').append(activePreviewHeight)
+                    .append(activePreviewFormat == UVCCamera.FRAME_FORMAT_MJPEG ? " MJPEG" : " YUYV").append(". ");
+            builder.append("Exposure abs=").append(exposureSupported).append(", auto=").append(autoExposureSupported).append('.');
+        }
         return builder.toString().trim();
     }
 
     public void closeActiveCamera() {
-        if (activeUvcCamera != null) {
-            removeBlackWhiteEffect();
-            try { activeUvcCamera.closeCamera(); }
-            catch (Throwable throwable) { notifyStatus("UVC close warning: " + describeThrowable(throwable)); }
-            activeUvcCamera = null;
+        try {
+            if (activeCamera != null) {
+                activeCamera.destroy();
+            }
+        } catch (Throwable throwable) {
+            notifyStatus("Direct libuvc close warning: " + describeThrowable(throwable));
+        } finally {
+            activeCamera = null;
+            activeControlBlock = null;
+            activePreviewWidth = 0;
+            activePreviewHeight = 0;
+            exposureBridge = null;
+            setControlAvailability(false);
+            isOpenAttemptScheduled = false;
         }
-        setControlAvailability(null);
-        isOpenAttemptScheduled = false;
     }
 
     public void setPreviewFitMode(PreviewFitMode fitMode) {
@@ -188,61 +204,34 @@ public final class UvcPreviewController {
         applyPreviewFitMode();
     }
 
-    private IDeviceConnectCallBack createDeviceConnectionCallback() {
-        return new IDeviceConnectCallBack() {
-            @Override public void onAttachDev(UsbDevice device) {
+    private USBMonitor.OnDeviceConnectListener createUsbListener() {
+        return new USBMonitor.OnDeviceConnectListener() {
+            @Override public void onAttach(UsbDevice device) {
                 if (!isUvcVideoDevice(device)) return;
                 rememberDetectedDevice(device);
                 notifyStatus("UVC attached: " + describeDeviceBrief(device) + ". Tap Open USB UVC camera to request permission.");
             }
-            @Override public void onDetachDec(UsbDevice device) {
+            @Override public void onDetach(UsbDevice device) {
                 if (device == null) return;
                 detectedUvcDevicesById.remove(device.getDeviceId());
-                MultiCameraClient.Camera removed = uvcCamerasByDeviceId.remove(device.getDeviceId());
-                if (removed != null) try { removed.closeCamera(); } catch (Throwable ignored) { }
                 if (pendingOpenDevice != null && pendingOpenDevice.getDeviceId() == device.getDeviceId()) pendingOpenDevice = null;
-                if (activeUvcCamera == removed) { activeUvcCamera = null; setControlAvailability(null); }
+                closeActiveCamera();
                 notifyStatus("UVC detached: " + device.getDeviceName());
             }
-            @Override public void onConnectDev(UsbDevice device, USBMonitor.UsbControlBlock controlBlock) {
-                if (!isUvcVideoDevice(device) || controlBlock == null) return;
-                try {
-                    rememberDetectedDevice(device);
-                    pendingOpenDevice = device;
-                    MultiCameraClient.Camera camera = getOrCreateUvcCamera(device);
-                    camera.setUsbControlBlock(controlBlock);
-                    camera.setCameraStateCallBack(createCameraStateCallback());
-                    activeUvcCamera = camera;
-                    openCameraWhenPreviewSurfaceIsReady(camera, device);
-                } catch (Throwable throwable) {
-                    notifyStatus("UVC connect handling failed: " + describeThrowable(throwable));
-                }
+            @Override public void onConnect(UsbDevice device, USBMonitor.UsbControlBlock ctrlBlock, boolean createNew) {
+                if (!isUvcVideoDevice(device) || ctrlBlock == null) return;
+                rememberDetectedDevice(device);
+                pendingOpenDevice = device;
+                activeControlBlock = ctrlBlock;
+                openCameraWhenPreviewSurfaceIsReady(device, ctrlBlock);
             }
-            @Override public void onDisConnectDec(UsbDevice device, USBMonitor.UsbControlBlock controlBlock) {
+            @Override public void onDisconnect(UsbDevice device, USBMonitor.UsbControlBlock ctrlBlock) {
                 closeActiveCamera();
                 notifyStatus("UVC disconnected" + (device == null ? "." : ": " + device.getDeviceName()));
             }
-            @Override public void onCancelDev(UsbDevice device) {
+            @Override public void onCancel(UsbDevice device) {
                 pendingOpenDevice = null;
                 notifyStatus("USB permission was cancelled" + (device == null ? "." : " for " + describeDeviceBrief(device) + "."));
-            }
-        };
-    }
-
-    private ICameraStateCallBack createCameraStateCallback() {
-        return new ICameraStateCallBack() {
-            @Override public void onCameraState(MultiCameraClient.Camera camera, ICameraStateCallBack.State state, String message) {
-                if (state == ICameraStateCallBack.State.OPENED) {
-                    activeUvcCamera = camera;
-                    applyPreviewFitMode();
-                    setControlAvailability(camera);
-                    notifyStatus("UVC preview opened. Exposure controls are queried from lower-level UVCCamera support flags.");
-                } else if (state == ICameraStateCallBack.State.CLOSED) {
-                    setControlAvailability(null);
-                    notifyStatus("UVC preview closed.");
-                } else if (state == ICameraStateCallBack.State.ERROR) {
-                    notifyStatus("UVC preview error: " + (message == null ? "unknown error" : message));
-                }
             }
         };
     }
@@ -254,7 +243,7 @@ public final class UvcPreviewController {
                 isPreviewSurfaceAvailable = true;
                 applyPreviewFitMode();
                 notifyStatus("Preview surface ready: " + width + "×" + height + ".");
-                if (activeUvcCamera != null && pendingOpenDevice != null) openCameraWhenPreviewSurfaceIsReady(activeUvcCamera, pendingOpenDevice);
+                if (pendingOpenDevice != null && activeControlBlock != null) openCameraWhenPreviewSurfaceIsReady(pendingOpenDevice, activeControlBlock);
             }
             @Override public void onSurfaceTextureSizeChanged(SurfaceTexture surfaceTexture, int width, int height) { applyPreviewFitMode(); }
             @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture surfaceTexture) { isPreviewSurfaceAvailable = false; closeActiveCamera(); return true; }
@@ -268,14 +257,15 @@ public final class UvcPreviewController {
         int cw = previewContainer.getWidth(), ch = previewContainer.getHeight();
         if (cw <= 0 || ch <= 0) return;
         int tw = cw, th = ch;
+        float sourceAspect = activePreviewWidth > 0 && activePreviewHeight > 0 ? activePreviewWidth / (float) activePreviewHeight : DEFAULT_PREVIEW_SOURCE_ASPECT;
         if (previewFitMode != PreviewFitMode.STRETCH) {
-            boolean containerWide = cw / (float) ch > DEFAULT_PREVIEW_SOURCE_ASPECT;
+            boolean containerWide = cw / (float) ch > sourceAspect;
             if (previewFitMode == PreviewFitMode.CONTAIN) {
-                if (containerWide) { th = ch; tw = Math.round(th * DEFAULT_PREVIEW_SOURCE_ASPECT); }
-                else { tw = cw; th = Math.round(tw / DEFAULT_PREVIEW_SOURCE_ASPECT); }
+                if (containerWide) { th = ch; tw = Math.round(th * sourceAspect); }
+                else { tw = cw; th = Math.round(tw / sourceAspect); }
             } else {
-                if (containerWide) { tw = cw; th = Math.round(tw / DEFAULT_PREVIEW_SOURCE_ASPECT); }
-                else { th = ch; tw = Math.round(th * DEFAULT_PREVIEW_SOURCE_ASPECT); }
+                if (containerWide) { tw = cw; th = Math.round(tw / sourceAspect); }
+                else { th = ch; tw = Math.round(th * sourceAspect); }
             }
         }
         FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) previewView.getLayoutParams();
@@ -288,20 +278,63 @@ public final class UvcPreviewController {
         previewContainer.invalidate();
     }
 
-    private void openCameraWhenPreviewSurfaceIsReady(MultiCameraClient.Camera camera, UsbDevice device) {
-        isPreviewSurfaceAvailable = previewView.isAvailable();
-        if (!isPreviewSurfaceAvailable) {
-            notifyStatus("UVC permission granted for " + describeDeviceBrief(device) + ", waiting for preview surface. Current preview view size: " + previewView.getWidth() + "×" + previewView.getHeight() + ".");
-            scheduleOpenAttemptAfterSurfaceRecheck(camera, device);
-            return;
-        }
+    private void openCameraWhenPreviewSurfaceIsReady(UsbDevice device, USBMonitor.UsbControlBlock ctrlBlock) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                isPreviewSurfaceAvailable = previewView.isAvailable() && previewView.getSurfaceTexture() != null;
+                if (!isPreviewSurfaceAvailable) {
+                    notifyStatus("UVC permission granted for " + describeDeviceBrief(device) + ", waiting for preview surface.");
+                    scheduleOpenAttemptAfterSurfaceRecheck(device, ctrlBlock);
+                    return;
+                }
+                openDirectCamera(device, ctrlBlock);
+            }
+        });
+    }
+
+    private void openDirectCamera(UsbDevice device, USBMonitor.UsbControlBlock ctrlBlock) {
+        closeActiveCamera();
         try {
-            camera.openCamera(previewView, createPreviewRequest());
+            UVCCamera camera = new UVCCamera();
+            camera.open(ctrlBlock);
+            SizeSelection selection = choosePreviewSize(camera, UVCCamera.FRAME_FORMAT_MJPEG);
+            if (selection == null) selection = choosePreviewSize(camera, UVCCamera.FRAME_FORMAT_YUYV);
+            if (selection == null) throw new IllegalStateException("No supported UVC preview size reported by camera");
+            camera.setPreviewSize(selection.width, selection.height, 1, 31, selection.format, UVCCamera.DEFAULT_BANDWIDTH);
+            camera.setPreviewTexture(previewView.getSurfaceTexture());
+            camera.startPreview();
+            camera.updateCameraParams();
+            activeCamera = camera;
+            activeControlBlock = ctrlBlock;
+            activePreviewWidth = selection.width;
+            activePreviewHeight = selection.height;
+            activePreviewFormat = selection.format;
+            exposureBridge = UvcExposureBridge.fromDirectCamera(camera);
+            setControlAvailability(true);
+            applyControls("camera opened");
             applyPreviewFitMode();
-            notifyStatus("Opening UVC preview for " + describeDeviceBrief(device) + "…");
+            notifyStatus("Direct libuvc preview opened for " + describeDeviceBrief(device) + " at "
+                    + selection.width + "×" + selection.height
+                    + (selection.format == UVCCamera.FRAME_FORMAT_MJPEG ? " MJPEG." : " YUYV."));
         } catch (Throwable throwable) {
-            notifyStatus("Failed to open UVC preview: " + describeThrowable(throwable));
+            activeCamera = null;
+            exposureBridge = null;
+            setControlAvailability(false);
+            notifyStatus("Failed to open direct libuvc preview: " + describeThrowable(throwable));
         }
+    }
+
+    private SizeSelection choosePreviewSize(UVCCamera camera, int format) {
+        List<Size> sizes;
+        try { sizes = camera.getSupportedSizeList(format); }
+        catch (Throwable ignored) { return null; }
+        if (sizes == null || sizes.isEmpty()) return null;
+        Size best = null;
+        for (Size size : sizes) {
+            if (size.width == 640 && size.height == 480) { best = size; break; }
+            if (best == null) best = size;
+        }
+        return best == null ? null : new SizeSelection(best.width, best.height, format);
     }
 
     private void scheduleSurfaceAvailabilityRecheck(String reason) {
@@ -309,51 +342,27 @@ public final class UvcPreviewController {
             @Override public void run() {
                 isPreviewSurfaceAvailable = previewView.isAvailable();
                 applyPreviewFitMode();
-                if (isPreviewSurfaceAvailable) {
-                    notifyStatus("Preview surface ready after " + reason + ".");
-                    if (activeUvcCamera != null && pendingOpenDevice != null) openCameraWhenPreviewSurfaceIsReady(activeUvcCamera, pendingOpenDevice);
-                }
+                if (isPreviewSurfaceAvailable) notifyStatus("Preview surface ready after " + reason + ".");
             }
         }, SURFACE_RECHECK_DELAY_MS);
     }
 
-    private void scheduleOpenAttemptAfterSurfaceRecheck(MultiCameraClient.Camera camera, UsbDevice device) {
+    private void scheduleOpenAttemptAfterSurfaceRecheck(UsbDevice device, USBMonitor.UsbControlBlock ctrlBlock) {
         if (isOpenAttemptScheduled) return;
         isOpenAttemptScheduled = true;
         previewView.postDelayed(new Runnable() {
             @Override public void run() {
                 isOpenAttemptScheduled = false;
-                isPreviewSurfaceAvailable = previewView.isAvailable();
-                applyPreviewFitMode();
-                if (isPreviewSurfaceAvailable) openCameraWhenPreviewSurfaceIsReady(camera, device);
+                if (previewView.isAvailable() && previewView.getSurfaceTexture() != null) openDirectCamera(device, ctrlBlock);
                 else notifyStatus("Preview surface still unavailable. Preview view size: " + previewView.getWidth() + "×" + previewView.getHeight() + ".");
             }
         }, SURFACE_RECHECK_DELAY_MS);
     }
 
-    private CameraRequest createPreviewRequest() {
-        return new CameraRequest.Builder().setContinuousAFModel(true).setContinuousAutoModel(true).create();
-    }
-
-    private MultiCameraClient.Camera getOrCreateUvcCamera(UsbDevice device) {
-        MultiCameraClient.Camera existing = uvcCamerasByDeviceId.get(device.getDeviceId());
-        if (existing != null) return existing;
-        MultiCameraClient.Camera created = new MultiCameraClient.Camera(context, device);
-        uvcCamerasByDeviceId.put(device.getDeviceId(), created);
-        return created;
-    }
-
     private void refreshDetectedDeviceCacheFromUsbHost() {
-        for (UsbDevice device : getUvcDevicesFromClientSafely()) rememberDetectedDevice(device);
-    }
-
-    private List<UsbDevice> getUvcDevicesFromClientSafely() {
-        List<UsbDevice> out = new ArrayList<>();
         try {
-            List<UsbDevice> all = uvcClient.getDeviceList(null);
-            if (all != null) for (UsbDevice device : all) if (isUvcVideoDevice(device)) out.add(device);
+            for (UsbDevice device : usbMonitor.getDeviceList()) if (isUvcVideoDevice(device)) rememberDetectedDevice(device);
         } catch (Throwable throwable) { notifyStatus("USB device scan failed: " + describeThrowable(throwable)); }
-        return out;
     }
 
     private void buildControlsPanel() {
@@ -374,17 +383,23 @@ public final class UvcPreviewController {
         contrastSeekBar = addSlider(body, "Contrast", 50, contrastValueTextView = valueText());
         gainSeekBar = addSlider(body, "Gain", 0, gainValueTextView = valueText());
         exposureSeekBar = addSlider(body, "Exposure", 50, exposureValueTextView = valueText());
-        autoExposureCheckBox = new CheckBox(context); autoExposureCheckBox.setText("Auto exposure"); autoExposureCheckBox.setTextColor(Color.rgb(243,245,247)); autoExposureCheckBox.setTextSize(12);
-        blackWhiteCheckBox = new CheckBox(context); blackWhiteCheckBox.setText("B&W"); blackWhiteCheckBox.setTextColor(Color.rgb(243,245,247)); blackWhiteCheckBox.setTextSize(12);
+        autoExposureCheckBox = checkbox("Auto exposure");
+        blackWhiteCheckBox = checkbox("B&W");
         body.addView(autoExposureCheckBox, new LinearLayout.LayoutParams(-1, -2));
         body.addView(blackWhiteCheckBox, new LinearLayout.LayoutParams(-1, -2));
-        TextView fpsNote = text("FPS is still hidden: it requires choosing a supported preview size/FPS tuple before stream open, not a live UVC control.", 11, false);
+        TextView fpsNote = text("FPS will be added as preview-mode negotiation, not a live UVC control.", 11, false);
         fpsNote.setTextColor(Color.rgb(255,212,121)); body.addView(fpsNote, new LinearLayout.LayoutParams(-1, -2));
-        controlStatusTextView = text("Open UVC camera to query exposure support.", 11, false); body.addView(controlStatusTextView, new LinearLayout.LayoutParams(-1, -2));
+        controlStatusTextView = text("Open UVC camera to query direct libuvc controls.", 11, false); body.addView(controlStatusTextView, new LinearLayout.LayoutParams(-1, -2));
         controlsPanel.addView(scroll, new LinearLayout.LayoutParams(-1, dp(190)));
         FrameLayout.LayoutParams pp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM); pp.setMargins(dp(8), dp(8), dp(8), dp(8));
         root.addView(controlsPanel, pp);
         wireControls();
+    }
+
+    private CheckBox checkbox(String label) {
+        CheckBox checkBox = new CheckBox(context);
+        checkBox.setText(label); checkBox.setTextColor(Color.rgb(243,245,247)); checkBox.setTextSize(12);
+        return checkBox;
     }
 
     private void wireControls() {
@@ -396,7 +411,7 @@ public final class UvcPreviewController {
         brightnessSeekBar.setOnSeekBarChangeListener(l); contrastSeekBar.setOnSeekBarChangeListener(l); gainSeekBar.setOnSeekBarChangeListener(l); exposureSeekBar.setOnSeekBarChangeListener(l);
         autoExposureCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() { @Override public void onCheckedChanged(CompoundButton b, boolean checked) { if (!loadingControls) { readWidgets(); updateExposureWidgetState(); applyControls("auto exposure change"); saveControlSettings(); } } });
         blackWhiteCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() { @Override public void onCheckedChanged(CompoundButton b, boolean checked) { if (!loadingControls) { readWidgets(); applyControls("B&W change"); saveControlSettings(); } } });
-        setControlAvailability(null);
+        setControlAvailability(false);
     }
 
     private SeekBar addSlider(LinearLayout parent, String label, int initial, TextView value) {
@@ -417,62 +432,56 @@ public final class UvcPreviewController {
     }
 
     private void readWidgets() { brightnessValue = brightnessSeekBar.getProgress(); contrastValue = contrastSeekBar.getProgress(); gainValue = gainSeekBar.getProgress(); exposureValue = exposureSeekBar.getProgress(); autoExposure = autoExposureCheckBox.isChecked(); blackWhite = blackWhiteCheckBox.isChecked(); }
-    private void updateLabels() { brightnessValueTextView.setText(String.format(Locale.US, "%+d display", (brightnessValue - 50) * 2)); contrastValueTextView.setText(String.format(Locale.US, "%.2fx", Math.max(0.05f, contrastValue / 50f))); gainValueTextView.setText(String.format(Locale.US, "%d raw", gainValue)); exposureValueTextView.setText(String.format(Locale.US, "%d%% %s", exposureValue, autoExposure ? "auto" : "manual")); }
+    private void updateLabels() { brightnessValueTextView.setText(String.format(Locale.US, "%d%%", brightnessValue)); contrastValueTextView.setText(String.format(Locale.US, "%d%%", contrastValue)); gainValueTextView.setText(String.format(Locale.US, "%d%%", gainValue)); exposureValueTextView.setText(String.format(Locale.US, "%d%% %s", exposureValue, autoExposure ? "auto" : "manual")); }
 
-    private void setControlAvailability(MultiCameraClient.Camera camera) {
-        exposureBridge = camera == null ? null : UvcExposureBridge.fromAusbcCamera(camera);
+    private void setControlAvailability(boolean cameraOpen) {
+        brightnessSupported = activeCamera != null && safeCheckSupport(UVCCamera.PU_BRIGHTNESS);
+        contrastSupported = activeCamera != null && safeCheckSupport(UVCCamera.PU_CONTRAST);
+        gainSupported = activeCamera != null && safeCheckSupport(UVCCamera.PU_GAIN);
         exposureSupported = exposureBridge != null && exposureBridge.supportsAbsoluteExposure();
         autoExposureSupported = exposureBridge != null && exposureBridge.supportsAutoExposureMode();
-        boolean gain = camera != null && hasMethod(camera, "setGain", int.class);
-        if (controlsPanel != null) {
-            gainSeekBar.setEnabled(gain);
-            autoExposureCheckBox.setEnabled(autoExposureSupported);
-            if (exposureBridge != null) queryExposureFromDevice();
-            updateExposureWidgetState();
-            String text = camera == null ? "Open UVC camera to query exposure support." : String.format(Locale.US,
-                    "AUSBC methods: brightness=%s, contrast=%s, gain=%s, B&W effect=%s. Exposure bridge: abs=%s, auto=%s, %s.",
-                    hasMethod(camera, "setBrightness", int.class), hasMethod(camera, "setContrast", int.class), gain,
-                    canUseBlackWhiteEffect(camera), exposureSupported, autoExposureSupported,
-                    exposureBridge == null ? "no UVCCamera handle" : exposureBridge.describeExposureRange());
-            controlStatusTextView.setText(text);
-        }
+        if (controlsPanel == null) return;
+        brightnessSeekBar.setEnabled(cameraOpen && brightnessSupported);
+        contrastSeekBar.setEnabled(cameraOpen && contrastSupported);
+        gainSeekBar.setEnabled(cameraOpen && gainSupported);
+        autoExposureCheckBox.setEnabled(cameraOpen && autoExposureSupported);
+        if (cameraOpen && exposureBridge != null) queryExposureFromDevice();
+        updateExposureWidgetState();
+        String text = !cameraOpen ? "Open UVC camera to query direct libuvc controls." : String.format(Locale.US,
+                "Direct libuvc: %dx%d %s. brightness=%s, contrast=%s, gain=%s, exposure=%s, auto=%s, %s.",
+                activePreviewWidth, activePreviewHeight, activePreviewFormat == UVCCamera.FRAME_FORMAT_MJPEG ? "MJPEG" : "YUYV",
+                brightnessSupported, contrastSupported, gainSupported, exposureSupported, autoExposureSupported,
+                exposureBridge == null ? "no exposure bridge" : exposureBridge.describeExposureRange());
+        controlStatusTextView.setText(text);
     }
+
+    private boolean safeCheckSupport(long flag) { try { return activeCamera.checkSupportFlag(flag); } catch (Throwable ignored) { return false; } }
 
     private void queryExposureFromDevice() {
         loadingControls = true;
-        if (autoExposureSupported) {
-            autoExposure = exposureBridge.isAutoExposureEnabled();
-            autoExposureCheckBox.setChecked(autoExposure);
-        }
+        if (autoExposureSupported) { autoExposure = exposureBridge.isAutoExposureEnabled(); autoExposureCheckBox.setChecked(autoExposure); }
         if (exposureSupported) {
             int currentExposure = exposureBridge.getExposurePercent();
-            if (currentExposure >= 0) {
-                exposureValue = currentExposure;
-                exposureSeekBar.setProgress(currentExposure);
-            }
+            if (currentExposure >= 0) { exposureValue = currentExposure; exposureSeekBar.setProgress(currentExposure); }
         }
         loadingControls = false;
         updateLabels();
     }
 
-    private void updateExposureWidgetState() {
-        if (exposureSeekBar != null) exposureSeekBar.setEnabled(exposureSupported && !autoExposure);
-    }
+    private void updateExposureWidgetState() { if (exposureSeekBar != null) exposureSeekBar.setEnabled(activeCamera != null && exposureSupported && !autoExposure); }
 
     private void applyControls(String reason) {
         applyDisplayFilter();
-        if (activeUvcCamera == null) { setStatus("Controls applied (" + reason + "). Display fallback only until camera opens."); return; }
-        int accepted = 0;
-        if (callInt(activeUvcCamera, "setBrightness", brightnessValue)) accepted++;
-        if (callInt(activeUvcCamera, "setContrast", contrastValue)) accepted++;
-        if (callInt(activeUvcCamera, "setGain", gainValue)) accepted++;
-        boolean aeOk = false, exposureOk = false;
+        if (activeCamera == null) { setStatus("Controls applied (" + reason + "). Waiting for direct UVC camera."); return; }
+        boolean b = false, c = false, g = false, ae = false, e = false;
+        try { if (brightnessSupported) { activeCamera.setBrightness(brightnessValue); b = true; } } catch (Throwable ignored) { }
+        try { if (contrastSupported) { activeCamera.setContrast(contrastValue); c = true; } } catch (Throwable ignored) { }
+        try { if (gainSupported) { activeCamera.setGain(gainValue); g = true; } } catch (Throwable ignored) { }
         if (exposureBridge != null) {
-            if (autoExposureSupported) aeOk = exposureBridge.setAutoExposureEnabled(autoExposure);
-            if (exposureSupported && !autoExposure) exposureOk = exposureBridge.setExposurePercent(exposureValue);
+            if (autoExposureSupported) ae = exposureBridge.setAutoExposureEnabled(autoExposure);
+            if (exposureSupported && !autoExposure) e = exposureBridge.setExposurePercent(exposureValue);
         }
-        boolean bwOk = blackWhite ? applyBlackWhiteEffect() : removeBlackWhiteEffect();
-        setStatus("Controls applied (" + reason + "). AUSBC setters=" + accepted + "; AE=" + aeOk + "; exposure=" + exposureOk + "; B&W effect=" + bwOk + ".");
+        setStatus("Controls applied (" + reason + "). brightness=" + b + "; contrast=" + c + "; gain=" + g + "; AE=" + ae + "; exposure=" + e + ".");
     }
 
     private void applyDisplayFilter() {
@@ -481,18 +490,6 @@ public final class UvcPreviewController {
         cm.postConcat(new ColorMatrix(new float[]{c,0,0,0,b, 0,c,0,0,b, 0,0,c,0,b, 0,0,0,1,0}));
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG); paint.setColorFilter(new ColorMatrixColorFilter(cm)); previewView.setLayerType(View.LAYER_TYPE_HARDWARE, paint); previewView.invalidate();
     }
-
-    private boolean canUseBlackWhiteEffect(Object camera) { return classAvailable("com.jiangdg.ausbc.render.effect.EffectBlackWhite") && (hasAnyMethod(camera, "addRenderEffect") || hasAnyMethod(camera, "updateRenderEffect")); }
-    private boolean applyBlackWhiteEffect() { if (activeUvcCamera == null) return false; if (blackWhiteEffect == null) blackWhiteEffect = newBlackWhiteEffect(); if (blackWhiteEffect == null) return false; return callOne(activeUvcCamera, "addRenderEffect", blackWhiteEffect) || callTwo(activeUvcCamera, "updateRenderEffect", CAMERA_EFFECT_FILTER_CLASSIFY_ID, blackWhiteEffect); }
-    private boolean removeBlackWhiteEffect() { if (activeUvcCamera == null || blackWhiteEffect == null) { blackWhiteEffect = null; return false; } boolean ok = callOne(activeUvcCamera, "removeRenderEffect", blackWhiteEffect); blackWhiteEffect = null; return ok; }
-    private Object newBlackWhiteEffect() { try { Class<?> c = Class.forName("com.jiangdg.ausbc.render.effect.EffectBlackWhite"); for (Constructor<?> x : c.getConstructors()) if (x.getParameterTypes().length == 1) return x.newInstance(context); } catch (Throwable ignored) { } return null; }
-
-    private boolean callInt(Object target, String name, int value) { try { target.getClass().getMethod(name, int.class).invoke(target, value); return true; } catch (Throwable ignored) { return false; } }
-    private boolean callOne(Object target, String name, Object arg) { try { for (Method m : target.getClass().getMethods()) if (m.getName().equals(name) && m.getParameterTypes().length == 1 && m.getParameterTypes()[0].isAssignableFrom(arg.getClass())) { m.invoke(target, arg); return true; } } catch (Throwable ignored) { } return false; }
-    private boolean callTwo(Object target, String name, int a, Object b) { try { for (Method m : target.getClass().getMethods()) if (m.getName().equals(name) && m.getParameterTypes().length == 2 && m.getParameterTypes()[1].isAssignableFrom(b.getClass())) { m.invoke(target, a, b); return true; } } catch (Throwable ignored) { } return false; }
-    private boolean hasMethod(Object target, String name, Class<?>... types) { try { target.getClass().getMethod(name, types); return true; } catch (Throwable ignored) { return false; } }
-    private boolean hasAnyMethod(Object target, String name) { for (Method m : target.getClass().getMethods()) if (m.getName().equals(name)) return true; return false; }
-    private boolean classAvailable(String name) { try { Class.forName(name); return true; } catch (Throwable ignored) { return false; } }
 
     private void updateControlsCollapsed() { if (controlsPanel == null) return; for (int i = 1; i < controlsPanel.getChildCount(); i++) controlsPanel.getChildAt(i).setVisibility(controlsCollapsed ? View.GONE : View.VISIBLE); ((TextView) controlsPanel.getChildAt(0)).setText(controlsCollapsed ? "Camera image controls  ▼" : "Camera image controls  ▲"); }
     private void removeControlsPanel() { if (controlsPanel == null) return; ViewGroup p = (ViewGroup) controlsPanel.getParent(); if (p != null) p.removeView(controlsPanel); controlsPanel = null; }
@@ -506,7 +503,12 @@ public final class UvcPreviewController {
     private String describeDeviceBrief(UsbDevice d) { return String.format(Locale.US, "VID %04x / PID %04x", d.getVendorId(), d.getProductId()); }
     private String describeDeviceLong(UsbDevice d) { return String.format(Locale.US, "VID %04x / PID %04x, interfaces=%d, name=%s", d.getVendorId(), d.getProductId(), d.getInterfaceCount(), d.getDeviceName()); }
     private String describeThrowable(Throwable t) { String m = t.getMessage(); return t.getClass().getSimpleName() + ": " + (m == null || m.trim().isEmpty() ? "no detail message" : m); }
-    private void notifyStatus(String s) { if (listener != null) listener.onUvcStatusChanged(s); }
+    private void notifyStatus(final String s) { mainHandler.post(new Runnable() { @Override public void run() { if (listener != null) listener.onUvcStatusChanged(s); } }); }
     private int dp(int v) { return Math.round(v * context.getResources().getDisplayMetrics().density); }
     private static int clamp(int v, int min, int max) { return Math.max(min, Math.min(max, v)); }
+
+    private static final class SizeSelection {
+        final int width, height, format;
+        SizeSelection(int width, int height, int format) { this.width = width; this.height = height; this.format = format; }
+    }
 }
