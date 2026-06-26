@@ -6,12 +6,12 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 /**
- * Reflective bridge to the lower-level libuvc UVCCamera object owned by AUSBC's CameraUVC.
+ * Narrow bridge to libuvc's native exposure controls.
  *
- * <p>AUSBC exposes brightness/contrast/gain/render effects through its public camera wrapper,
- * but the exposure and auto-exposure calls live in the lower-level UVCCamera class. CameraUVC
- * keeps that instance in a private mUvcCamera field, so this class performs a narrow, isolated
- * reflection bridge. All failures are reported as unsupported instead of crashing the preview.</p>
+ * <p>UVCCamera exposes support flags publicly, but its exposure setters/getters are private
+ * native Java methods. This bridge centralizes that reflection so the preview backend can use
+ * direct libuvc while still querying support, reading current exposure and setting manual/auto
+ * exposure. Failures are reported as unsupported instead of crashing the preview.</p>
  */
 public final class UvcExposureBridge {
     private static final int MANUAL_EXPOSURE_MODE = 1;
@@ -46,13 +46,12 @@ public final class UvcExposureBridge {
         nativeSetExposureMode = accessibleMethod(cls, "nativeSetExposureMode", long.class, int.class);
     }
 
-    public static UvcExposureBridge fromAusbcCamera(Object ausbcCamera) {
-        UVCCamera uvc = findPrivateUvcCamera(ausbcCamera);
-        if (uvc == null) {
+    public static UvcExposureBridge fromDirectCamera(UVCCamera uvcCamera) {
+        if (uvcCamera == null) {
             return null;
         }
         try {
-            return new UvcExposureBridge(uvc);
+            return new UvcExposureBridge(uvcCamera);
         } catch (ReflectiveOperationException ignored) {
             return null;
         }
@@ -169,23 +168,6 @@ public final class UvcExposureBridge {
         Method method = cls.getDeclaredMethod(name, parameterTypes);
         method.setAccessible(true);
         return method;
-    }
-
-    private static UVCCamera findPrivateUvcCamera(Object ausbcCamera) {
-        Class<?> cls = ausbcCamera == null ? null : ausbcCamera.getClass();
-        while (cls != null) {
-            try {
-                Field field = cls.getDeclaredField("mUvcCamera");
-                field.setAccessible(true);
-                Object value = field.get(ausbcCamera);
-                return value instanceof UVCCamera ? (UVCCamera) value : null;
-            } catch (NoSuchFieldException ignored) {
-                cls = cls.getSuperclass();
-            } catch (Throwable ignored) {
-                return null;
-            }
-        }
-        return null;
     }
 
     private static int clamp(int value, int min, int max) {
