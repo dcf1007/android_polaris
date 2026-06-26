@@ -28,7 +28,6 @@ import com.jiangdg.usb.USBMonitor;
 import com.jiangdg.utils.Size;
 import com.jiangdg.uvc.UVCCamera;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -62,9 +61,11 @@ public final class UvcPreviewController {
     private int activePreviewWidth = 0;
     private int activePreviewHeight = 0;
     private int activePreviewFormat = UVCCamera.FRAME_FORMAT_MJPEG;
+    private String supportedStreamModesText = "Stream modes: open the UVC camera to query formats.";
 
     private LinearLayout controlsPanel;
     private TextView controlStatusTextView;
+    private TextView streamModesTextView;
     private TextView brightnessValueTextView;
     private TextView contrastValueTextView;
     private TextView gainValueTextView;
@@ -175,17 +176,16 @@ public final class UvcPreviewController {
         builder.append("Preview source: direct libuvc/UVCCamera. AUSBC wrapper is not used. ");
         if (activeCamera != null) {
             builder.append("Active preview: ").append(activePreviewWidth).append('×').append(activePreviewHeight)
-                    .append(activePreviewFormat == UVCCamera.FRAME_FORMAT_MJPEG ? " MJPEG" : " YUYV").append(". ");
-            builder.append("Exposure abs=").append(exposureSupported).append(", auto=").append(autoExposureSupported).append('.');
+                    .append(activePreviewFormat == UVCCamera.FRAME_FORMAT_MJPEG ? " MJPEG" : " YUYV/uncompressed").append(". ");
+            builder.append("Exposure abs=").append(exposureSupported).append(", auto=").append(autoExposureSupported).append(".\n");
+            builder.append(supportedStreamModesText);
         }
         return builder.toString().trim();
     }
 
     public void closeActiveCamera() {
         try {
-            if (activeCamera != null) {
-                activeCamera.destroy();
-            }
+            if (activeCamera != null) activeCamera.destroy();
         } catch (Throwable throwable) {
             notifyStatus("Direct libuvc close warning: " + describeThrowable(throwable));
         } finally {
@@ -193,6 +193,7 @@ public final class UvcPreviewController {
             activeControlBlock = null;
             activePreviewWidth = 0;
             activePreviewHeight = 0;
+            supportedStreamModesText = "Stream modes: open the UVC camera to query formats.";
             exposureBridge = null;
             setControlAvailability(false);
             isOpenAttemptScheduled = false;
@@ -297,6 +298,8 @@ public final class UvcPreviewController {
         try {
             UVCCamera camera = new UVCCamera();
             camera.open(ctrlBlock);
+            supportedStreamModesText = describeSupportedStreamModes(camera);
+            if (streamModesTextView != null) streamModesTextView.setText(supportedStreamModesText);
             SizeSelection selection = choosePreviewSize(camera, UVCCamera.FRAME_FORMAT_MJPEG);
             if (selection == null) selection = choosePreviewSize(camera, UVCCamera.FRAME_FORMAT_YUYV);
             if (selection == null) throw new IllegalStateException("No supported UVC preview size reported by camera");
@@ -315,13 +318,56 @@ public final class UvcPreviewController {
             applyPreviewFitMode();
             notifyStatus("Direct libuvc preview opened for " + describeDeviceBrief(device) + " at "
                     + selection.width + "×" + selection.height
-                    + (selection.format == UVCCamera.FRAME_FORMAT_MJPEG ? " MJPEG." : " YUYV."));
+                    + (selection.format == UVCCamera.FRAME_FORMAT_MJPEG ? " MJPEG." : " YUYV/uncompressed."));
         } catch (Throwable throwable) {
             activeCamera = null;
             exposureBridge = null;
             setControlAvailability(false);
             notifyStatus("Failed to open direct libuvc preview: " + describeThrowable(throwable));
         }
+    }
+
+    private String describeSupportedStreamModes(UVCCamera camera) {
+        StringBuilder builder = new StringBuilder("Supported stream modes:");
+        appendStreamModeList(builder, camera, UVCCamera.FRAME_FORMAT_YUYV, "YUYV / uncompressed");
+        appendStreamModeList(builder, camera, UVCCamera.FRAME_FORMAT_MJPEG, "MJPEG / compressed");
+        return builder.toString();
+    }
+
+    private void appendStreamModeList(StringBuilder builder, UVCCamera camera, int format, String label) {
+        List<Size> sizes;
+        try { sizes = camera.getSupportedSizeList(format); }
+        catch (Throwable ignored) { sizes = null; }
+        builder.append('\n').append(label).append(':');
+        if (sizes == null || sizes.isEmpty()) {
+            builder.append(" none reported");
+            return;
+        }
+        int shown = 0;
+        for (Size size : sizes) {
+            if (shown >= 8) {
+                builder.append(" …");
+                break;
+            }
+            builder.append('\n').append("  • ").append(size.width).append('×').append(size.height);
+            String fps = fpsSummary(size);
+            if (!fps.isEmpty()) builder.append(" @ ").append(fps);
+            shown++;
+        }
+    }
+
+    private String fpsSummary(Size size) {
+        if (size == null || size.fps == null || size.fps.length == 0) return "";
+        float min = Float.MAX_VALUE;
+        float max = 0.0f;
+        for (float fps : size.fps) {
+            if (fps <= 0.0f) continue;
+            min = Math.min(min, fps);
+            max = Math.max(max, fps);
+        }
+        if (max <= 0.0f || min == Float.MAX_VALUE) return "";
+        if (Math.abs(max - min) < 0.1f) return String.format(Locale.US, "%.0f fps", max);
+        return String.format(Locale.US, "%.0f–%.0f fps", min, max);
     }
 
     private SizeSelection choosePreviewSize(UVCCamera camera, int format) {
@@ -387,10 +433,11 @@ public final class UvcPreviewController {
         blackWhiteCheckBox = checkbox("B&W");
         body.addView(autoExposureCheckBox, new LinearLayout.LayoutParams(-1, -2));
         body.addView(blackWhiteCheckBox, new LinearLayout.LayoutParams(-1, -2));
-        TextView fpsNote = text("FPS will be added as preview-mode negotiation, not a live UVC control.", 11, false);
-        fpsNote.setTextColor(Color.rgb(255,212,121)); body.addView(fpsNote, new LinearLayout.LayoutParams(-1, -2));
+        streamModesTextView = text(supportedStreamModesText, 11, false);
+        streamModesTextView.setTextColor(Color.rgb(180, 190, 203));
+        body.addView(streamModesTextView, new LinearLayout.LayoutParams(-1, -2));
         controlStatusTextView = text("Open UVC camera to query direct libuvc controls.", 11, false); body.addView(controlStatusTextView, new LinearLayout.LayoutParams(-1, -2));
-        controlsPanel.addView(scroll, new LinearLayout.LayoutParams(-1, dp(190)));
+        controlsPanel.addView(scroll, new LinearLayout.LayoutParams(-1, dp(230)));
         FrameLayout.LayoutParams pp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM); pp.setMargins(dp(8), dp(8), dp(8), dp(8));
         root.addView(controlsPanel, pp);
         wireControls();
@@ -447,9 +494,10 @@ public final class UvcPreviewController {
         autoExposureCheckBox.setEnabled(cameraOpen && autoExposureSupported);
         if (cameraOpen && exposureBridge != null) queryExposureFromDevice();
         updateExposureWidgetState();
+        if (streamModesTextView != null) streamModesTextView.setText(supportedStreamModesText);
         String text = !cameraOpen ? "Open UVC camera to query direct libuvc controls." : String.format(Locale.US,
                 "Direct libuvc: %dx%d %s. brightness=%s, contrast=%s, gain=%s, exposure=%s, auto=%s, %s.",
-                activePreviewWidth, activePreviewHeight, activePreviewFormat == UVCCamera.FRAME_FORMAT_MJPEG ? "MJPEG" : "YUYV",
+                activePreviewWidth, activePreviewHeight, activePreviewFormat == UVCCamera.FRAME_FORMAT_MJPEG ? "MJPEG" : "YUYV/uncompressed",
                 brightnessSupported, contrastSupported, gainSupported, exposureSupported, autoExposureSupported,
                 exposureBridge == null ? "no exposure bridge" : exposureBridge.describeExposureRange());
         controlStatusTextView.setText(text);
