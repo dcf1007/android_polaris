@@ -67,17 +67,25 @@ public final class UvcPreviewController {
     private TextView brightnessValueTextView;
     private TextView contrastValueTextView;
     private TextView gainValueTextView;
+    private TextView exposureValueTextView;
     private SeekBar brightnessSeekBar;
     private SeekBar contrastSeekBar;
     private SeekBar gainSeekBar;
+    private SeekBar exposureSeekBar;
+    private CheckBox autoExposureCheckBox;
     private CheckBox blackWhiteCheckBox;
     private boolean controlsCollapsed;
     private boolean loadingControls;
     private int brightnessValue = 50;
     private int contrastValue = 50;
     private int gainValue = 0;
+    private int exposureValue = 50;
+    private boolean autoExposure = true;
     private boolean blackWhite;
     private Object blackWhiteEffect;
+    private UvcExposureBridge exposureBridge;
+    private boolean exposureSupported;
+    private boolean autoExposureSupported;
 
     public UvcPreviewController(Context context, FrameLayout previewContainer, Listener listener) {
         this.context = context;
@@ -160,7 +168,7 @@ public final class UvcPreviewController {
         StringBuilder builder = new StringBuilder();
         builder.append(detectedUvcDevicesById.size()).append(" raw UVC device(s) detected:\n");
         for (UsbDevice device : detectedUvcDevicesById.values()) builder.append(describeDeviceLong(device)).append('\n');
-        builder.append("Preview source: USB OTG UVC backend only. AUSBC 3.2.7 exposes camera setters/effects but not queryable exposure, auto-exposure or FPS controls through MultiCameraClient.");
+        builder.append("Preview source: USB OTG UVC backend only. Exposure is accessed through the lower-level libuvc UVCCamera bridge when the device advertises AE_ABS support.");
         return builder.toString().trim();
     }
 
@@ -228,8 +236,7 @@ public final class UvcPreviewController {
                     activeUvcCamera = camera;
                     applyPreviewFitMode();
                     setControlAvailability(camera);
-                    applyControls("camera opened");
-                    notifyStatus("UVC preview opened. Controls are capability-checked against the active AUSBC camera object.");
+                    notifyStatus("UVC preview opened. Exposure controls are queried from lower-level UVCCamera support flags.");
                 } else if (state == ICameraStateCallBack.State.CLOSED) {
                     setControlAvailability(null);
                     notifyStatus("UVC preview closed.");
@@ -366,12 +373,15 @@ public final class UvcPreviewController {
         brightnessSeekBar = addSlider(body, "Brightness", 50, brightnessValueTextView = valueText());
         contrastSeekBar = addSlider(body, "Contrast", 50, contrastValueTextView = valueText());
         gainSeekBar = addSlider(body, "Gain", 0, gainValueTextView = valueText());
+        exposureSeekBar = addSlider(body, "Exposure", 50, exposureValueTextView = valueText());
+        autoExposureCheckBox = new CheckBox(context); autoExposureCheckBox.setText("Auto exposure"); autoExposureCheckBox.setTextColor(Color.rgb(243,245,247)); autoExposureCheckBox.setTextSize(12);
         blackWhiteCheckBox = new CheckBox(context); blackWhiteCheckBox.setText("B&W"); blackWhiteCheckBox.setTextColor(Color.rgb(243,245,247)); blackWhiteCheckBox.setTextSize(12);
+        body.addView(autoExposureCheckBox, new LinearLayout.LayoutParams(-1, -2));
         body.addView(blackWhiteCheckBox, new LinearLayout.LayoutParams(-1, -2));
-        TextView unsupported = text("Exposure, auto-exposure and FPS are hidden: AUSBC 3.2.7 does not expose queryable controls for them through MultiCameraClient.", 11, false);
-        unsupported.setTextColor(Color.rgb(255,212,121)); body.addView(unsupported, new LinearLayout.LayoutParams(-1, -2));
-        controlStatusTextView = text("Open UVC camera to check available methods.", 11, false); body.addView(controlStatusTextView, new LinearLayout.LayoutParams(-1, -2));
-        controlsPanel.addView(scroll, new LinearLayout.LayoutParams(-1, dp(160)));
+        TextView fpsNote = text("FPS is still hidden: it requires choosing a supported preview size/FPS tuple before stream open, not a live UVC control.", 11, false);
+        fpsNote.setTextColor(Color.rgb(255,212,121)); body.addView(fpsNote, new LinearLayout.LayoutParams(-1, -2));
+        controlStatusTextView = text("Open UVC camera to query exposure support.", 11, false); body.addView(controlStatusTextView, new LinearLayout.LayoutParams(-1, -2));
+        controlsPanel.addView(scroll, new LinearLayout.LayoutParams(-1, dp(190)));
         FrameLayout.LayoutParams pp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM); pp.setMargins(dp(8), dp(8), dp(8), dp(8));
         root.addView(controlsPanel, pp);
         wireControls();
@@ -383,7 +393,8 @@ public final class UvcPreviewController {
             @Override public void onStartTrackingTouch(SeekBar s) { }
             @Override public void onStopTrackingTouch(SeekBar s) { readWidgets(); applyControls("control released"); saveControlSettings(); }
         };
-        brightnessSeekBar.setOnSeekBarChangeListener(l); contrastSeekBar.setOnSeekBarChangeListener(l); gainSeekBar.setOnSeekBarChangeListener(l);
+        brightnessSeekBar.setOnSeekBarChangeListener(l); contrastSeekBar.setOnSeekBarChangeListener(l); gainSeekBar.setOnSeekBarChangeListener(l); exposureSeekBar.setOnSeekBarChangeListener(l);
+        autoExposureCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() { @Override public void onCheckedChanged(CompoundButton b, boolean checked) { if (!loadingControls) { readWidgets(); updateExposureWidgetState(); applyControls("auto exposure change"); saveControlSettings(); } } });
         blackWhiteCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() { @Override public void onCheckedChanged(CompoundButton b, boolean checked) { if (!loadingControls) { readWidgets(); applyControls("B&W change"); saveControlSettings(); } } });
         setControlAvailability(null);
     }
@@ -396,24 +407,56 @@ public final class UvcPreviewController {
 
     private void loadControlSettings() {
         SharedPreferences p = context.getSharedPreferences(SETTINGS, Context.MODE_PRIVATE);
-        brightnessValue = clamp(p.getInt("brightness", 50), 0, 100); contrastValue = clamp(p.getInt("contrast", 50), 0, 100); gainValue = clamp(p.getInt("gain", 0), 0, 100); blackWhite = p.getBoolean("bw", false);
-        if (controlsPanel != null) { loadingControls = true; brightnessSeekBar.setProgress(brightnessValue); contrastSeekBar.setProgress(contrastValue); gainSeekBar.setProgress(gainValue); blackWhiteCheckBox.setChecked(blackWhite); loadingControls = false; updateLabels(); }
+        brightnessValue = clamp(p.getInt("brightness", 50), 0, 100); contrastValue = clamp(p.getInt("contrast", 50), 0, 100); gainValue = clamp(p.getInt("gain", 0), 0, 100); exposureValue = clamp(p.getInt("exposure", 50), 0, 100); autoExposure = p.getBoolean("ae", true); blackWhite = p.getBoolean("bw", false);
+        if (controlsPanel != null) { loadingControls = true; brightnessSeekBar.setProgress(brightnessValue); contrastSeekBar.setProgress(contrastValue); gainSeekBar.setProgress(gainValue); exposureSeekBar.setProgress(exposureValue); autoExposureCheckBox.setChecked(autoExposure); blackWhiteCheckBox.setChecked(blackWhite); loadingControls = false; updateLabels(); updateExposureWidgetState(); }
         applyDisplayFilter();
     }
 
     private void saveControlSettings() {
-        context.getSharedPreferences(SETTINGS, Context.MODE_PRIVATE).edit().putInt("brightness", brightnessValue).putInt("contrast", contrastValue).putInt("gain", gainValue).putBoolean("bw", blackWhite).apply();
+        context.getSharedPreferences(SETTINGS, Context.MODE_PRIVATE).edit().putInt("brightness", brightnessValue).putInt("contrast", contrastValue).putInt("gain", gainValue).putInt("exposure", exposureValue).putBoolean("ae", autoExposure).putBoolean("bw", blackWhite).apply();
     }
 
-    private void readWidgets() { brightnessValue = brightnessSeekBar.getProgress(); contrastValue = contrastSeekBar.getProgress(); gainValue = gainSeekBar.getProgress(); blackWhite = blackWhiteCheckBox.isChecked(); }
-    private void updateLabels() { brightnessValueTextView.setText(String.format(Locale.US, "%+d display", (brightnessValue - 50) * 2)); contrastValueTextView.setText(String.format(Locale.US, "%.2fx", Math.max(0.05f, contrastValue / 50f))); gainValueTextView.setText(String.format(Locale.US, "%d raw", gainValue)); }
+    private void readWidgets() { brightnessValue = brightnessSeekBar.getProgress(); contrastValue = contrastSeekBar.getProgress(); gainValue = gainSeekBar.getProgress(); exposureValue = exposureSeekBar.getProgress(); autoExposure = autoExposureCheckBox.isChecked(); blackWhite = blackWhiteCheckBox.isChecked(); }
+    private void updateLabels() { brightnessValueTextView.setText(String.format(Locale.US, "%+d display", (brightnessValue - 50) * 2)); contrastValueTextView.setText(String.format(Locale.US, "%.2fx", Math.max(0.05f, contrastValue / 50f))); gainValueTextView.setText(String.format(Locale.US, "%d raw", gainValue)); exposureValueTextView.setText(String.format(Locale.US, "%d%% %s", exposureValue, autoExposure ? "auto" : "manual")); }
 
     private void setControlAvailability(MultiCameraClient.Camera camera) {
-        if (controlsPanel == null) return;
+        exposureBridge = camera == null ? null : UvcExposureBridge.fromAusbcCamera(camera);
+        exposureSupported = exposureBridge != null && exposureBridge.supportsAbsoluteExposure();
+        autoExposureSupported = exposureBridge != null && exposureBridge.supportsAutoExposureMode();
         boolean gain = camera != null && hasMethod(camera, "setGain", int.class);
-        gainSeekBar.setEnabled(gain);
-        String text = camera == null ? "Open UVC camera to check available methods." : String.format(Locale.US, "Active AUSBC methods: brightness=%s, contrast=%s, gain=%s, B&W effect=%s.", hasMethod(camera, "setBrightness", int.class), hasMethod(camera, "setContrast", int.class), gain, canUseBlackWhiteEffect(camera));
-        controlStatusTextView.setText(text);
+        if (controlsPanel != null) {
+            gainSeekBar.setEnabled(gain);
+            autoExposureCheckBox.setEnabled(autoExposureSupported);
+            if (exposureBridge != null) queryExposureFromDevice();
+            updateExposureWidgetState();
+            String text = camera == null ? "Open UVC camera to query exposure support." : String.format(Locale.US,
+                    "AUSBC methods: brightness=%s, contrast=%s, gain=%s, B&W effect=%s. Exposure bridge: abs=%s, auto=%s, %s.",
+                    hasMethod(camera, "setBrightness", int.class), hasMethod(camera, "setContrast", int.class), gain,
+                    canUseBlackWhiteEffect(camera), exposureSupported, autoExposureSupported,
+                    exposureBridge == null ? "no UVCCamera handle" : exposureBridge.describeExposureRange());
+            controlStatusTextView.setText(text);
+        }
+    }
+
+    private void queryExposureFromDevice() {
+        loadingControls = true;
+        if (autoExposureSupported) {
+            autoExposure = exposureBridge.isAutoExposureEnabled();
+            autoExposureCheckBox.setChecked(autoExposure);
+        }
+        if (exposureSupported) {
+            int currentExposure = exposureBridge.getExposurePercent();
+            if (currentExposure >= 0) {
+                exposureValue = currentExposure;
+                exposureSeekBar.setProgress(currentExposure);
+            }
+        }
+        loadingControls = false;
+        updateLabels();
+    }
+
+    private void updateExposureWidgetState() {
+        if (exposureSeekBar != null) exposureSeekBar.setEnabled(exposureSupported && !autoExposure);
     }
 
     private void applyControls(String reason) {
@@ -423,8 +466,13 @@ public final class UvcPreviewController {
         if (callInt(activeUvcCamera, "setBrightness", brightnessValue)) accepted++;
         if (callInt(activeUvcCamera, "setContrast", contrastValue)) accepted++;
         if (callInt(activeUvcCamera, "setGain", gainValue)) accepted++;
+        boolean aeOk = false, exposureOk = false;
+        if (exposureBridge != null) {
+            if (autoExposureSupported) aeOk = exposureBridge.setAutoExposureEnabled(autoExposure);
+            if (exposureSupported && !autoExposure) exposureOk = exposureBridge.setExposurePercent(exposureValue);
+        }
         boolean bwOk = blackWhite ? applyBlackWhiteEffect() : removeBlackWhiteEffect();
-        setStatus("Controls applied (" + reason + "). AUSBC setters accepted=" + accepted + "; B&W effect=" + bwOk + ". Exposure/auto-exposure/FPS unavailable in this wrapper.");
+        setStatus("Controls applied (" + reason + "). AUSBC setters=" + accepted + "; AE=" + aeOk + "; exposure=" + exposureOk + "; B&W effect=" + bwOk + ".");
     }
 
     private void applyDisplayFilter() {
