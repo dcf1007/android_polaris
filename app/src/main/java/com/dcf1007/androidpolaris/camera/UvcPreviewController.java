@@ -1,6 +1,8 @@
 package com.dcf1007.androidpolaris.camera;
 
+import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
@@ -9,6 +11,8 @@ import android.os.Looper;
 import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.FrameLayout;
 
 import com.serenegiant.usb.Size;
@@ -19,6 +23,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -27,10 +32,11 @@ import java.util.Map;
 /**
  * Backend-only direct UVC controller.
  *
- * <p>This class owns USB monitoring, UVC permission, direct {@link UVCCamera} opening,
- * capability queries, preview stream selection and low-level camera controls. It deliberately
- * does not create visible Android controls. MainActivity owns the dropdowns/sliders and calls
- * this backend after binding queried capabilities into the main camera panel.</p>
+ * <p>This class owns USB monitoring, permission handling, direct {@link UVCCamera} opening,
+ * capability queries, preview stream selection and low-level camera controls. MainActivity owns
+ * the main camera settings UI. The only visible element created here is a small debug-log export
+ * button so native UVC failures can be exported even before the main UI capability panel is fully
+ * wired.</p>
  */
 public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
@@ -38,8 +44,10 @@ public final class UvcPreviewController {
     private static final int AUTO_EXPOSURE_MODE = 2;
     private static final int STREAM_TYPE_YUYV = 4;
     private static final int STREAM_TYPE_MJPEG = 6;
+    private static final int FALLBACK_FPS = 30;
     private static final long PREVIEW_SURFACE_RETRY_DELAY_MS = 250L;
     private static final float DEFAULT_PREVIEW_ASPECT_RATIO = 4.0f / 3.0f;
+    private static final int MAX_DEBUG_LOG_CHARS = 20000;
 
     public enum PreviewFitMode { COVER, CONTAIN, STRETCH }
 
@@ -120,13 +128,16 @@ public final class UvcPreviewController {
         }
     }
 
+    private final Context context;
     private final Handler mainThreadHandler = new Handler(Looper.getMainLooper());
     private final FrameLayout previewContainer;
     private final TextureView previewTextureView;
     private final Listener listener;
     private final USBMonitor usbMonitor;
     private final Map<Integer, UsbDevice> detectedUvcDevicesById = new LinkedHashMap<>();
+    private final StringBuilder debugLogBuilder = new StringBuilder();
 
+    private Button exportDebugLogButton;
     private UsbDevice pendingOpenDevice;
     private USBMonitor.UsbControlBlock activeControlBlock;
     private UVCCamera activeCamera;
@@ -164,11 +175,13 @@ public final class UvcPreviewController {
     private boolean nativeExposureAccessReady;
 
     public UvcPreviewController(Context context, FrameLayout previewContainer, Listener listener) {
+        this.context = context;
         this.previewContainer = previewContainer;
         this.listener = listener;
         this.previewTextureView = new TextureView(context);
         this.usbMonitor = new USBMonitor(context, createUsbConnectionListener());
         configurePreviewTextureView();
+        attachDebugLogExportButton();
         applyPreviewFitModeLater();
         publishCapabilities("UVC backend ready. USB has not been scanned yet.");
     }
@@ -206,6 +219,7 @@ public final class UvcPreviewController {
 
     public void destroy() {
         closeActiveCamera();
+        removeDebugLogExportButton();
         detectedUvcDevicesById.clear();
         try {
             usbMonitor.destroy();
@@ -333,6 +347,56 @@ public final class UvcPreviewController {
         });
     }
 
+    private void attachDebugLogExportButton() {
+        if (!(context instanceof Activity)) return;
+        FrameLayout root = ((Activity) context).findViewById(android.R.id.content);
+        if (root == null || exportDebugLogButton != null) return;
+        exportDebugLogButton = new Button(context);
+        exportDebugLogButton.setAllCaps(false);
+        exportDebugLogButton.setText("Export UVC log");
+        exportDebugLogButton.setTextSize(12);
+        exportDebugLogButton.setAlpha(0.88f);
+        exportDebugLogButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                shareDebugLog();
+            }
+        });
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.END);
+        params.setMargins(8, 8, 8, 8);
+        root.addView(exportDebugLogButton, params);
+    }
+
+    private void removeDebugLogExportButton() {
+        if (exportDebugLogButton == null) return;
+        ViewGroup parent = (ViewGroup) exportDebugLogButton.getParent();
+        if (parent != null) parent.removeView(exportDebugLogButton);
+        exportDebugLogButton = null;
+    }
+
+    private void shareDebugLog() {
+        String logText = buildDebugExportText();
+        Intent shareIntent = new Intent(Intent.ACTION_SEND);
+        shareIntent.setType("text/plain");
+        shareIntent.putExtra(Intent.EXTRA_SUBJECT, "Android Polaris UVC debug log");
+        shareIntent.putExtra(Intent.EXTRA_TEXT, logText);
+        context.startActivity(Intent.createChooser(shareIntent, "Export UVC debug log"));
+    }
+
+    private String buildDebugExportText() {
+        StringBuilder builder = new StringBuilder();
+        builder.append("Android Polaris UVC debug log\n");
+        builder.append("Generated: ").append(String.format(Locale.US, "%tF %<tT", new Date())).append('\n');
+        builder.append("Device: ").append(android.os.Build.MANUFACTURER).append(' ')
+                .append(android.os.Build.MODEL).append(" / Android ")
+                .append(android.os.Build.VERSION.RELEASE).append('\n');
+        builder.append('\n').append("Current UVC state:\n").append(describeConnectedUvcDevices()).append('\n');
+        builder.append('\n').append("Log:\n").append(debugLogBuilder.length() == 0 ? "No UVC log lines recorded." : debugLogBuilder.toString().trim());
+        return builder.toString();
+    }
+
     private USBMonitor.OnDeviceConnectListener createUsbConnectionListener() {
         return new USBMonitor.OnDeviceConnectListener() {
             @Override public void onAttach(UsbDevice device) {
@@ -450,7 +514,7 @@ public final class UvcPreviewController {
                 if (rounded > 0 && !values.contains(rounded)) values.add(rounded);
             }
         }
-        if (values.isEmpty()) values.add(UVCCamera.DEFAULT_PREVIEW_MAX_FPS);
+        if (values.isEmpty()) values.add(FALLBACK_FPS);
         return values;
     }
 
@@ -761,11 +825,20 @@ public final class UvcPreviewController {
     }
 
     private void notifyStatus(final String statusText) {
+        recordDebugLine(statusText);
         mainThreadHandler.post(new Runnable() {
             @Override public void run() {
                 if (listener != null) listener.onUvcStatusChanged(statusText);
             }
         });
+    }
+
+    private void recordDebugLine(String message) {
+        if (message == null || message.trim().isEmpty()) return;
+        debugLogBuilder.append(String.format(Locale.US, "[%tF %<tT] %s\n", new Date(), message.trim()));
+        if (debugLogBuilder.length() > MAX_DEBUG_LOG_CHARS) {
+            debugLogBuilder.delete(0, debugLogBuilder.length() - MAX_DEBUG_LOG_CHARS);
+        }
     }
 
     private static int clamp(int value, int min, int max) {
