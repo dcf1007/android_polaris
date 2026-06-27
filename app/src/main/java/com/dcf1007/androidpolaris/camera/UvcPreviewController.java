@@ -1,41 +1,23 @@
 package com.dcf1007.androidpolaris.camera;
 
-import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
-import android.graphics.Color;
 import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
-import android.view.ViewGroup;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.CheckBox;
-import android.widget.CompoundButton;
 import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
-import android.widget.SeekBar;
-import android.widget.Spinner;
-import android.widget.TextView;
 
 import com.serenegiant.usb.Size;
 import com.serenegiant.usb.USBMonitor;
 import com.serenegiant.usb.UVCCamera;
 
-import java.io.File;
-import java.io.FileOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
@@ -45,13 +27,12 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Direct UVC backend and capability presenter.
+ * Direct UVC backend.
  *
- * <p>The backend owns USB monitoring, Android USB permission, direct {@link UVCCamera} opening,
- * UVC capability querying, stream-mode selection, and camera-side controls. MainActivity still
- * owns the main application layout; this class attaches a compact camera-options panel to the
- * activity root so queried UVC options are immediately visible until the surrounding UI is further
- * consolidated.</p>
+ * <p>This class owns USB monitoring, USB permission, direct UVCCamera opening,
+ * UVC capability queries, stream selection, preview fitting, and hardware-side
+ * camera controls. The visible options panel and local log saving are delegated
+ * to small package helpers to keep this backend readable.</p>
  */
 public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
@@ -156,23 +137,7 @@ public final class UvcPreviewController {
     private final Map<Integer, UsbDevice> detectedUvcDevicesById = new LinkedHashMap<>();
     private final StringBuilder debugLogBuilder = new StringBuilder();
 
-    private LinearLayout cameraOptionsPanel;
-    private TextView cameraOptionsTitleView;
-    private TextView cameraCapabilitiesTextView;
-    private Spinner streamModeSpinner;
-    private SeekBar brightnessSeekBar;
-    private SeekBar contrastSeekBar;
-    private SeekBar gainSeekBar;
-    private SeekBar exposureSeekBar;
-    private TextView brightnessValueTextView;
-    private TextView contrastValueTextView;
-    private TextView gainValueTextView;
-    private TextView exposureValueTextView;
-    private CheckBox autoExposureCheckBox;
-    private Button exportDebugLogButton;
-    private boolean cameraOptionsCollapsed;
-    private boolean bindingCameraOptions;
-
+    private UvcCameraOptionsPanel cameraOptionsPanel;
     private UsbDevice pendingOpenDevice;
     private USBMonitor.UsbControlBlock activeControlBlock;
     private UVCCamera activeCamera;
@@ -186,7 +151,7 @@ public final class UvcPreviewController {
 
     private int brightnessPercent = 50;
     private int contrastPercent = 50;
-    private int gainPercent = 0;
+    private int gainPercent;
     private int exposurePercent = 50;
     private boolean autoExposureEnabled = true;
 
@@ -216,7 +181,7 @@ public final class UvcPreviewController {
         this.previewTextureView = new TextureView(context);
         this.usbMonitor = new USBMonitor(context, createUsbConnectionListener());
         configurePreviewTextureView();
-        attachCameraOptionsPanel();
+        this.cameraOptionsPanel = new UvcCameraOptionsPanel(context, this);
         applyPreviewFitModeLater();
         publishCapabilities("UVC backend ready. USB has not been scanned yet.");
     }
@@ -254,7 +219,10 @@ public final class UvcPreviewController {
 
     public void destroy() {
         closeActiveCamera();
-        removeCameraOptionsPanel();
+        if (cameraOptionsPanel != null) {
+            cameraOptionsPanel.destroy();
+            cameraOptionsPanel = null;
+        }
         detectedUvcDevicesById.clear();
         try {
             usbMonitor.destroy();
@@ -355,8 +323,16 @@ public final class UvcPreviewController {
         this.gainPercent = clamp(gainPercent, 0, 100);
         this.exposurePercent = clamp(exposurePercent, 0, 100);
         this.autoExposureEnabled = autoExposureEnabled;
-        updateCameraOptionValueLabels();
         applyCameraControls("camera option changed");
+    }
+
+    void saveDebugLogToDownloads() {
+        try {
+            String savedLocation = UvcLogStorage.saveLogFile(context, buildDebugExportText());
+            notifyStatus("UVC debug log saved to " + savedLocation + ".");
+        } catch (Throwable throwable) {
+            notifyStatus("Failed to save UVC log file: " + describeThrowable(throwable));
+        }
     }
 
     private void configurePreviewTextureView() {
@@ -381,247 +357,6 @@ public final class UvcPreviewController {
             @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture surfaceTexture) { closeActiveCamera(); return true; }
             @Override public void onSurfaceTextureUpdated(SurfaceTexture surfaceTexture) { }
         });
-    }
-
-    private void attachCameraOptionsPanel() {
-        if (!(context instanceof Activity) || cameraOptionsPanel != null) return;
-        FrameLayout root = ((Activity) context).findViewById(android.R.id.content);
-        if (root == null) return;
-
-        cameraOptionsPanel = new LinearLayout(context);
-        cameraOptionsPanel.setOrientation(LinearLayout.VERTICAL);
-        cameraOptionsPanel.setPadding(dp(10), dp(8), dp(10), dp(8));
-        cameraOptionsPanel.setBackgroundColor(Color.argb(238, 16, 18, 24));
-
-        cameraOptionsTitleView = createPanelText("UVC camera options  ▲", 13, true);
-        cameraOptionsTitleView.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) {
-                cameraOptionsCollapsed = !cameraOptionsCollapsed;
-                updateCameraOptionsCollapsedState();
-            }
-        });
-        cameraOptionsPanel.addView(cameraOptionsTitleView, new LinearLayout.LayoutParams(-1, -2));
-
-        ScrollView scrollView = new ScrollView(context);
-        LinearLayout body = new LinearLayout(context);
-        body.setOrientation(LinearLayout.VERTICAL);
-        scrollView.addView(body, new ScrollView.LayoutParams(-1, -2));
-
-        body.addView(createPanelText("Stream mode", 11, false), new LinearLayout.LayoutParams(-1, -2));
-        streamModeSpinner = new Spinner(context);
-        streamModeSpinner.setEnabled(false);
-        body.addView(streamModeSpinner, new LinearLayout.LayoutParams(-1, -2));
-
-        brightnessSeekBar = addCameraControlSlider(body, "Brightness", brightnessValueTextView = createRightValueText());
-        contrastSeekBar = addCameraControlSlider(body, "Contrast", contrastValueTextView = createRightValueText());
-        gainSeekBar = addCameraControlSlider(body, "Gain", gainValueTextView = createRightValueText());
-        exposureSeekBar = addCameraControlSlider(body, "Exposure", exposureValueTextView = createRightValueText());
-        autoExposureCheckBox = new CheckBox(context);
-        autoExposureCheckBox.setText("Auto exposure");
-        autoExposureCheckBox.setTextColor(Color.rgb(243, 245, 247));
-        autoExposureCheckBox.setTextSize(12);
-        autoExposureCheckBox.setEnabled(false);
-        body.addView(autoExposureCheckBox, new LinearLayout.LayoutParams(-1, -2));
-
-        cameraCapabilitiesTextView = createPanelText("Open the UVC camera to query capabilities.", 11, false);
-        cameraCapabilitiesTextView.setTextColor(Color.rgb(180, 190, 203));
-        body.addView(cameraCapabilitiesTextView, new LinearLayout.LayoutParams(-1, -2));
-
-        exportDebugLogButton = new Button(context);
-        exportDebugLogButton.setAllCaps(false);
-        exportDebugLogButton.setText("Export UVC log file");
-        exportDebugLogButton.setTextSize(12);
-        exportDebugLogButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) {
-                shareDebugLogFile();
-            }
-        });
-        body.addView(exportDebugLogButton, new LinearLayout.LayoutParams(-1, -2));
-
-        cameraOptionsPanel.addView(scrollView, new LinearLayout.LayoutParams(-1, dp(260)));
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        params.setMargins(dp(8), dp(8), dp(8), dp(8));
-        root.addView(cameraOptionsPanel, params);
-        wireCameraOptionsPanel();
-        updateCameraOptionValueLabels();
-    }
-
-    private void removeCameraOptionsPanel() {
-        if (cameraOptionsPanel == null) return;
-        ViewGroup parent = (ViewGroup) cameraOptionsPanel.getParent();
-        if (parent != null) parent.removeView(cameraOptionsPanel);
-        cameraOptionsPanel = null;
-    }
-
-    private void wireCameraOptionsPanel() {
-        if (streamModeSpinner != null) {
-            streamModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-                @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                    if (bindingCameraOptions || position < 0 || position >= availableStreamModes.size()) return;
-                    selectStreamMode(availableStreamModes.get(position));
-                }
-                @Override public void onNothingSelected(AdapterView<?> parent) { }
-            });
-        }
-        SeekBar.OnSeekBarChangeListener seekListener = new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (!fromUser || bindingCameraOptions) return;
-                readCameraOptionWidgetsAndApply();
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) { }
-            @Override public void onStopTrackingTouch(SeekBar seekBar) { readCameraOptionWidgetsAndApply(); }
-        };
-        brightnessSeekBar.setOnSeekBarChangeListener(seekListener);
-        contrastSeekBar.setOnSeekBarChangeListener(seekListener);
-        gainSeekBar.setOnSeekBarChangeListener(seekListener);
-        exposureSeekBar.setOnSeekBarChangeListener(seekListener);
-        autoExposureCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                if (bindingCameraOptions) return;
-                readCameraOptionWidgetsAndApply();
-            }
-        });
-    }
-
-    private SeekBar addCameraControlSlider(LinearLayout parent, String label, TextView valueView) {
-        LinearLayout row = new LinearLayout(context);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        TextView labelView = createPanelText(label, 11, false);
-        row.addView(labelView, new LinearLayout.LayoutParams(0, -2, 1.0f));
-        row.addView(valueView, new LinearLayout.LayoutParams(0, -2, 1.0f));
-        parent.addView(row, new LinearLayout.LayoutParams(-1, -2));
-        SeekBar seekBar = new SeekBar(context);
-        seekBar.setMax(100);
-        seekBar.setProgress(50);
-        seekBar.setEnabled(false);
-        parent.addView(seekBar, new LinearLayout.LayoutParams(-1, -2));
-        return seekBar;
-    }
-
-    private TextView createPanelText(String text, int sizeSp, boolean bold) {
-        TextView textView = new TextView(context);
-        textView.setText(text);
-        textView.setTextSize(sizeSp);
-        textView.setTextColor(Color.rgb(243, 245, 247));
-        textView.setPadding(0, dp(2), 0, dp(2));
-        if (bold) textView.setTypeface(textView.getTypeface(), android.graphics.Typeface.BOLD);
-        return textView;
-    }
-
-    private TextView createRightValueText() {
-        TextView textView = createPanelText("—", 11, false);
-        textView.setGravity(Gravity.END);
-        return textView;
-    }
-
-    private void readCameraOptionWidgetsAndApply() {
-        if (brightnessSeekBar == null) return;
-        setCameraControls(
-                brightnessSeekBar.getProgress(),
-                contrastSeekBar.getProgress(),
-                gainSeekBar.getProgress(),
-                exposureSeekBar.getProgress(),
-                autoExposureCheckBox.isChecked());
-    }
-
-    private void updateCameraOptionsPanel(UvcCapabilities capabilities) {
-        if (cameraOptionsPanel == null || capabilities == null) return;
-        bindingCameraOptions = true;
-        availableStreamModes = new ArrayList<>(capabilities.streamModes);
-        ArrayAdapter<StreamMode> streamAdapter = new ArrayAdapter<>(context, android.R.layout.simple_spinner_item, availableStreamModes);
-        streamAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        streamModeSpinner.setAdapter(streamAdapter);
-        streamModeSpinner.setEnabled(capabilities.cameraOpen && !availableStreamModes.isEmpty());
-        if (capabilities.activeStreamMode != null) {
-            int activeIndex = indexOfEquivalentMode(capabilities.activeStreamMode, availableStreamModes);
-            if (activeIndex >= 0) streamModeSpinner.setSelection(activeIndex, false);
-        }
-
-        brightnessSeekBar.setEnabled(capabilities.cameraOpen && capabilities.brightnessSupported);
-        contrastSeekBar.setEnabled(capabilities.cameraOpen && capabilities.contrastSupported);
-        gainSeekBar.setEnabled(capabilities.cameraOpen && capabilities.gainSupported);
-        autoExposureCheckBox.setEnabled(capabilities.cameraOpen && capabilities.autoExposureSupported);
-        autoExposureCheckBox.setChecked(capabilities.autoExposureEnabled);
-        exposureSeekBar.setEnabled(capabilities.cameraOpen && capabilities.exposureSupported && !capabilities.autoExposureEnabled);
-        exposureSeekBar.setProgress(clamp(capabilities.exposurePercent, 0, 100));
-
-        brightnessSeekBar.setProgress(brightnessPercent);
-        contrastSeekBar.setProgress(contrastPercent);
-        gainSeekBar.setProgress(gainPercent);
-        updateCameraOptionValueLabels();
-        cameraCapabilitiesTextView.setText(buildCapabilitySummary(capabilities));
-        bindingCameraOptions = false;
-    }
-
-    private int indexOfEquivalentMode(StreamMode target, List<StreamMode> modes) {
-        for (int i = 0; i < modes.size(); i++) {
-            StreamMode mode = modes.get(i);
-            if (mode.frameFormat == target.frameFormat && mode.width == target.width && mode.height == target.height && mode.fps == target.fps) return i;
-        }
-        return -1;
-    }
-
-    private String buildCapabilitySummary(UvcCapabilities capabilities) {
-        StringBuilder builder = new StringBuilder();
-        builder.append(capabilities.statusText == null ? "UVC status unavailable." : capabilities.statusText).append('\n');
-        builder.append("Stream modes: ").append(capabilities.streamModes.size()).append('\n');
-        builder.append("Brightness: ").append(capabilities.brightnessSupported ? "available" : "not reported").append('\n');
-        builder.append("Contrast: ").append(capabilities.contrastSupported ? "available" : "not reported").append('\n');
-        builder.append("Gain: ").append(capabilities.gainSupported ? "available" : "not reported").append('\n');
-        builder.append("Exposure: ").append(capabilities.exposureSupported ? capabilities.exposureRangeText : "not reported").append('\n');
-        builder.append("Auto exposure: ").append(capabilities.autoExposureSupported ? "available" : "not reported").append('\n');
-        builder.append("Colour/B&W/day-night: not reported as a standard UVC control.");
-        return builder.toString();
-    }
-
-    private void updateCameraOptionValueLabels() {
-        if (brightnessValueTextView != null) brightnessValueTextView.setText(brightnessPercent + "%");
-        if (contrastValueTextView != null) contrastValueTextView.setText(contrastPercent + "%");
-        if (gainValueTextView != null) gainValueTextView.setText(gainPercent + "%");
-        if (exposureValueTextView != null) exposureValueTextView.setText(exposurePercent + "%");
-    }
-
-    private void updateCameraOptionsCollapsedState() {
-        if (cameraOptionsPanel == null) return;
-        for (int index = 1; index < cameraOptionsPanel.getChildCount(); index++) {
-            cameraOptionsPanel.getChildAt(index).setVisibility(cameraOptionsCollapsed ? View.GONE : View.VISIBLE);
-        }
-        cameraOptionsTitleView.setText(cameraOptionsCollapsed ? "UVC camera options  ▼" : "UVC camera options  ▲");
-    }
-
-    private void shareDebugLogFile() {
-        try {
-            File directory = new File(context.getCacheDir(), "uvc_logs");
-            if (!directory.exists() && !directory.mkdirs()) {
-                throw new IllegalStateException("Could not create cache log directory");
-            }
-            File logFile = new File(directory, "android_polaris_uvc_debug_log.txt");
-            try (FileOutputStream outputStream = new FileOutputStream(logFile, false)) {
-                outputStream.write(buildDebugExportText().getBytes(StandardCharsets.UTF_8));
-            }
-            Uri uri = Uri.parse("content://" + context.getPackageName() + ".uvcdebug/" + logFile.getName());
-            Intent shareIntent = new Intent(Intent.ACTION_SEND);
-            shareIntent.setType("text/plain");
-            shareIntent.putExtra(Intent.EXTRA_SUBJECT, "Android Polaris UVC debug log");
-            shareIntent.putExtra(Intent.EXTRA_STREAM, uri);
-            shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            context.startActivity(Intent.createChooser(shareIntent, "Export UVC debug log file"));
-        } catch (Throwable throwable) {
-            notifyStatus("Failed to export UVC log file: " + describeThrowable(throwable));
-        }
-    }
-
-    private String buildDebugExportText() {
-        StringBuilder builder = new StringBuilder();
-        builder.append("Android Polaris UVC debug log\n");
-        builder.append("Generated: ").append(String.format(Locale.US, "%tF %<tT", new Date())).append('\n');
-        builder.append("Device: ").append(Build.MANUFACTURER).append(' ')
-                .append(Build.MODEL).append(" / Android ")
-                .append(Build.VERSION.RELEASE).append('\n');
-        builder.append('\n').append("Current UVC state:\n").append(describeConnectedUvcDevices()).append('\n');
-        builder.append('\n').append("Log:\n")
-                .append(debugLogBuilder.length() == 0 ? "No UVC log lines recorded." : debugLogBuilder.toString().trim());
-        return builder.toString();
     }
 
     private USBMonitor.OnDeviceConnectListener createUsbConnectionListener() {
@@ -1004,7 +739,7 @@ public final class UvcPreviewController {
         notifyStatus(statusText);
         mainThreadHandler.post(new Runnable() {
             @Override public void run() {
-                updateCameraOptionsPanel(capabilities);
+                if (cameraOptionsPanel != null) cameraOptionsPanel.update(capabilities);
                 if (listener != null) listener.onUvcCapabilitiesChanged(capabilities);
             }
         });
@@ -1022,6 +757,19 @@ public final class UvcPreviewController {
             builder.append("\n  • ").append(mode.fullLabel());
             shown++;
         }
+        return builder.toString();
+    }
+
+    private String buildDebugExportText() {
+        StringBuilder builder = new StringBuilder();
+        builder.append("Android Polaris UVC debug log\n");
+        builder.append("Generated: ").append(String.format(Locale.US, "%tF %<tT", new Date())).append('\n');
+        builder.append("Device: ").append(Build.MANUFACTURER).append(' ')
+                .append(Build.MODEL).append(" / Android ")
+                .append(Build.VERSION.RELEASE).append('\n');
+        builder.append('\n').append("Current UVC state:\n").append(describeConnectedUvcDevices()).append('\n');
+        builder.append('\n').append("Log:\n")
+                .append(debugLogBuilder.length() == 0 ? "No UVC log lines recorded." : debugLogBuilder.toString().trim());
         return builder.toString();
     }
 
@@ -1067,10 +815,6 @@ public final class UvcPreviewController {
         if (debugLogBuilder.length() > MAX_DEBUG_LOG_CHARS) {
             debugLogBuilder.delete(0, debugLogBuilder.length() - MAX_DEBUG_LOG_CHARS);
         }
-    }
-
-    private int dp(int value) {
-        return Math.round(value * context.getResources().getDisplayMetrics().density);
     }
 
     private static int clamp(int value, int min, int max) {
