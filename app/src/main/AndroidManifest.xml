@@ -17,12 +17,6 @@
         android:allowBackup="true"
         android:supportsRtl="true">
 
-        <provider
-            android:name=".camera.UvcDebugLogProvider"
-            android:authorities="${applicationId}.uvcdebug"
-            android:exported="false"
-            android:grantUriPermissions="true" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true">
