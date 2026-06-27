@@ -201,7 +201,9 @@ final class UvcCameraOptionsPanel {
         SeekBar.OnSeekBarChangeListener sliderListener = new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (!fromUser || binding) return;
-                applyCameraControls();
+                // Keep the UI responsive while dragging. The USB control write is sent once
+                // on release so preview streaming is not flooded with control transfers.
+                updateValueLabels();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
             @Override public void onStopTrackingTouch(SeekBar seekBar) {
