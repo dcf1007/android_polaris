@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- AUSBC/UVCCamera checks CAMERA permission on modern Android before opening
+    <!-- libuvc checks CAMERA permission on modern Android before opening
          the native USB-camera preview, even though no built-in Camera2 camera is used. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -16,6 +16,12 @@
         android:label="@string/app_name"
         android:allowBackup="true"
         android:supportsRtl="true">
+
+        <provider
+            android:name=".camera.UvcDebugLogProvider"
+            android:authorities="${applicationId}.uvcdebug"
+            android:exported="false"
+            android:grantUriPermissions="true" />
 
         <activity
             android:name=".MainActivity"
