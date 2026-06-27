@@ -25,8 +25,8 @@ import java.util.List;
  * UI binding for queried UVC capabilities.
  *
  * <p>The controller queries the camera and publishes a UvcCapabilities snapshot.
- * This panel turns that snapshot into enabled/disabled controls and forwards user
- * selections back to the controller. Unsupported controls remain visible but greyed out.</p>
+ * This panel is inserted as the first category in the app's existing camera panel,
+ * so it behaves like the rest of the interface instead of floating above the reticle.</p>
  */
 final class UvcCameraOptionsPanel {
     private final Context context;
@@ -48,11 +48,12 @@ final class UvcCameraOptionsPanel {
     private boolean collapsed;
     private boolean binding;
     private List<UvcPreviewController.StreamMode> streamModes = new ArrayList<>();
+    private UvcPreviewController.StreamMode activeStreamMode;
 
     UvcCameraOptionsPanel(Context context, UvcPreviewController controller) {
         this.context = context;
         this.controller = controller;
-        attach();
+        attachInsideMainCameraPanel();
     }
 
     void destroy() {
@@ -66,15 +67,21 @@ final class UvcCameraOptionsPanel {
         if (panel == null || capabilities == null) return;
 
         binding = true;
-        streamModes = new ArrayList<>(capabilities.streamModes);
-        ArrayAdapter<UvcPreviewController.StreamMode> adapter = new ArrayAdapter<>(
-                context, android.R.layout.simple_spinner_item, streamModes);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        streamModeSpinner.setAdapter(adapter);
+        activeStreamMode = capabilities.activeStreamMode;
+        List<UvcPreviewController.StreamMode> queriedModes = new ArrayList<>(capabilities.streamModes);
+        if (!sameModeList(streamModes, queriedModes)) {
+            streamModes = queriedModes;
+            ArrayAdapter<UvcPreviewController.StreamMode> adapter = new ArrayAdapter<>(
+                    context, android.R.layout.simple_spinner_item, streamModes);
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            streamModeSpinner.setAdapter(adapter);
+        }
         streamModeSpinner.setEnabled(capabilities.cameraOpen && !streamModes.isEmpty());
-        if (capabilities.activeStreamMode != null) {
-            int activeIndex = indexOfEquivalentMode(capabilities.activeStreamMode);
-            if (activeIndex >= 0) streamModeSpinner.setSelection(activeIndex, false);
+        if (activeStreamMode != null) {
+            int activeIndex = indexOfEquivalentMode(activeStreamMode);
+            if (activeIndex >= 0 && streamModeSpinner.getSelectedItemPosition() != activeIndex) {
+                streamModeSpinner.setSelection(activeIndex, false);
+            }
         }
 
         brightnessSeekBar.setEnabled(capabilities.cameraOpen && capabilities.brightnessSupported);
@@ -90,17 +97,17 @@ final class UvcCameraOptionsPanel {
         binding = false;
     }
 
-    private void attach() {
+    private void attachInsideMainCameraPanel() {
         if (!(context instanceof Activity)) return;
-        FrameLayout root = ((Activity) context).findViewById(android.R.id.content);
-        if (root == null) return;
+        FrameLayout activityContent = ((Activity) context).findViewById(android.R.id.content);
+        LinearLayout mainCameraPanel = findFirstPanelInScrollableControls(activityContent);
+        if (mainCameraPanel == null) return;
 
         panel = new LinearLayout(context);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(10), dp(8), dp(10), dp(8));
-        panel.setBackgroundColor(Color.argb(238, 16, 18, 24));
+        panel.setPadding(0, 0, 0, dp(8));
 
-        titleView = text("UVC camera options  ▲", 13, true);
+        titleView = text("UVC hardware controls  ▲", 13, true);
         titleView.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) {
                 collapsed = !collapsed;
@@ -109,10 +116,10 @@ final class UvcCameraOptionsPanel {
         });
         panel.addView(titleView, new LinearLayout.LayoutParams(-1, -2));
 
-        ScrollView scrollView = new ScrollView(context);
         LinearLayout body = new LinearLayout(context);
         body.setOrientation(LinearLayout.VERTICAL);
-        scrollView.addView(body, new ScrollView.LayoutParams(-1, -2));
+        body.setTag("uvc-options-body");
+        panel.addView(body, new LinearLayout.LayoutParams(-1, -2));
 
         body.addView(text("Stream mode", 11, false), new LinearLayout.LayoutParams(-1, -2));
         streamModeSpinner = new Spinner(context);
@@ -146,19 +153,42 @@ final class UvcCameraOptionsPanel {
         });
         body.addView(saveLogButton, new LinearLayout.LayoutParams(-1, -2));
 
-        panel.addView(scrollView, new LinearLayout.LayoutParams(-1, dp(260)));
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        params.setMargins(dp(8), dp(8), dp(8), dp(8));
-        root.addView(panel, params);
+        mainCameraPanel.addView(panel, 0, new LinearLayout.LayoutParams(-1, -2));
         wireActions();
         updateValueLabels();
+    }
+
+    private LinearLayout findFirstPanelInScrollableControls(View root) {
+        ScrollView controlsScroll = findFirstScrollView(root);
+        if (controlsScroll == null || controlsScroll.getChildCount() == 0) return null;
+        View controlsChild = controlsScroll.getChildAt(0);
+        if (!(controlsChild instanceof LinearLayout)) return null;
+        LinearLayout controlsColumn = (LinearLayout) controlsChild;
+        for (int i = 0; i < controlsColumn.getChildCount(); i++) {
+            View child = controlsColumn.getChildAt(i);
+            if (child instanceof LinearLayout) return (LinearLayout) child;
+        }
+        return null;
+    }
+
+    private ScrollView findFirstScrollView(View view) {
+        if (view instanceof ScrollView) return (ScrollView) view;
+        if (!(view instanceof ViewGroup)) return null;
+        ViewGroup group = (ViewGroup) view;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            ScrollView found = findFirstScrollView(group.getChildAt(i));
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private void wireActions() {
         streamModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (binding || position < 0 || position >= streamModes.size()) return;
-                controller.selectStreamMode(streamModes.get(position));
+                UvcPreviewController.StreamMode selectedMode = streamModes.get(position);
+                if (sameMode(selectedMode, activeStreamMode)) return;
+                controller.selectStreamMode(selectedMode);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });
@@ -230,13 +260,26 @@ final class UvcCameraOptionsPanel {
 
     private int indexOfEquivalentMode(UvcPreviewController.StreamMode target) {
         for (int i = 0; i < streamModes.size(); i++) {
-            UvcPreviewController.StreamMode mode = streamModes.get(i);
-            if (mode.frameFormat == target.frameFormat && mode.width == target.width
-                    && mode.height == target.height && mode.fps == target.fps) {
-                return i;
-            }
+            if (sameMode(streamModes.get(i), target)) return i;
         }
         return -1;
+    }
+
+    private boolean sameModeList(List<UvcPreviewController.StreamMode> first,
+                                 List<UvcPreviewController.StreamMode> second) {
+        if (first.size() != second.size()) return false;
+        for (int i = 0; i < first.size(); i++) {
+            if (!sameMode(first.get(i), second.get(i))) return false;
+        }
+        return true;
+    }
+
+    private boolean sameMode(UvcPreviewController.StreamMode a, UvcPreviewController.StreamMode b) {
+        return a != null && b != null
+                && a.frameFormat == b.frameFormat
+                && a.width == b.width
+                && a.height == b.height
+                && a.fps == b.fps;
     }
 
     private void updateCollapsedState() {
@@ -244,7 +287,7 @@ final class UvcCameraOptionsPanel {
         for (int index = 1; index < panel.getChildCount(); index++) {
             panel.getChildAt(index).setVisibility(collapsed ? View.GONE : View.VISIBLE);
         }
-        titleView.setText(collapsed ? "UVC camera options  ▼" : "UVC camera options  ▲");
+        titleView.setText(collapsed ? "UVC hardware controls  ▼" : "UVC hardware controls  ▲");
     }
 
     private TextView text(String text, int sizeSp, boolean bold) {
