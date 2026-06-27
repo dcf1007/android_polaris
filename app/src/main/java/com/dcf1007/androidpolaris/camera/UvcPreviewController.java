@@ -28,6 +28,8 @@ import com.jiangdg.usb.USBMonitor;
 import com.jiangdg.utils.Size;
 import com.jiangdg.uvc.UVCCamera;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -41,6 +43,8 @@ import java.util.Map;
  */
 public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
+    private static final int MANUAL_EXPOSURE_MODE = 1;
+    private static final int AUTO_EXPOSURE_MODE = 2;
     private static final long PREVIEW_SURFACE_RETRY_DELAY_MS = 250L;
     private static final String CAMERA_CONTROL_SETTINGS = "android_polaris_uvc_camera_controls";
     private static final float DEFAULT_PREVIEW_ASPECT_RATIO = 4.0f / 3.0f;
@@ -67,7 +71,19 @@ public final class UvcPreviewController {
     private UsbDevice pendingOpenDevice;
     private USBMonitor.UsbControlBlock activeControlBlock;
     private UVCCamera activeCamera;
-    private UvcExposureBridge exposureBridge;
+
+    private Field exposureNativePointerField;
+    private Field exposureMinimumField;
+    private Field exposureMaximumField;
+    private Field exposureDefaultField;
+    private Field exposureModeDefaultField;
+    private Method updateExposureLimitMethod;
+    private Method getExposureMethod;
+    private Method setExposureMethod;
+    private Method updateExposureModeLimitMethod;
+    private Method getExposureModeMethod;
+    private Method setExposureModeMethod;
+    private boolean nativeExposureAccessReady;
 
     private boolean usbMonitorRegistered;
     private boolean openRetryScheduled;
@@ -232,7 +248,7 @@ public final class UvcPreviewController {
         } finally {
             activeCamera = null;
             activeControlBlock = null;
-            exposureBridge = null;
+            clearNativeExposureAccess();
             activePreviewWidth = 0;
             activePreviewHeight = 0;
             activePreviewFormat = UVCCamera.FRAME_FORMAT_MJPEG;
@@ -379,7 +395,7 @@ public final class UvcPreviewController {
             activePreviewWidth = selectedMode.width;
             activePreviewHeight = selectedMode.height;
             activePreviewFormat = selectedMode.frameFormat;
-            exposureBridge = UvcExposureBridge.fromDirectCamera(camera);
+            prepareNativeExposureAccess();
 
             updateControlAvailability(true);
             applyCameraControls("camera opened");
@@ -390,7 +406,7 @@ public final class UvcPreviewController {
                     + " " + formatName(selectedMode.frameFormat) + ".");
         } catch (Throwable throwable) {
             activeCamera = null;
-            exposureBridge = null;
+            clearNativeExposureAccess();
             updateControlAvailability(false);
             notifyStatus("Failed to open direct libuvc preview: " + describeThrowable(throwable));
         }
@@ -784,8 +800,8 @@ public final class UvcPreviewController {
         brightnessSupported = activeCamera != null && checkControlSupport(UVCCamera.PU_BRIGHTNESS);
         contrastSupported = activeCamera != null && checkControlSupport(UVCCamera.PU_CONTRAST);
         gainSupported = activeCamera != null && checkControlSupport(UVCCamera.PU_GAIN);
-        exposureSupported = exposureBridge != null && exposureBridge.supportsAbsoluteExposure();
-        autoExposureSupported = exposureBridge != null && exposureBridge.supportsAutoExposureMode();
+        exposureSupported = nativeExposureAccessReady && checkControlSupport(UVCCamera.CTRL_AE_ABS);
+        autoExposureSupported = nativeExposureAccessReady && checkControlSupport(UVCCamera.CTRL_AE);
 
         if (controlPanel == null) {
             return;
@@ -795,7 +811,7 @@ public final class UvcPreviewController {
         gainSeekBar.setEnabled(cameraOpen && gainSupported);
         autoExposureCheckBox.setEnabled(cameraOpen && autoExposureSupported);
 
-        if (cameraOpen && exposureBridge != null) {
+        if (cameraOpen && nativeExposureAccessReady) {
             queryExposureFromDevice();
         }
         updateExposureWidgetEnabledState();
@@ -814,11 +830,11 @@ public final class UvcPreviewController {
     private void queryExposureFromDevice() {
         loadingSavedControls = true;
         if (autoExposureSupported) {
-            autoExposureEnabled = exposureBridge.isAutoExposureEnabled();
+            autoExposureEnabled = isAutoExposureCurrentlyEnabled();
             autoExposureCheckBox.setChecked(autoExposureEnabled);
         }
         if (exposureSupported) {
-            int currentExposurePercent = exposureBridge.getExposurePercent();
+            int currentExposurePercent = getExposurePercentFromDevice();
             if (currentExposurePercent >= 0) {
                 exposurePercent = currentExposurePercent;
                 exposureSeekBar.setProgress(currentExposurePercent);
@@ -859,7 +875,7 @@ public final class UvcPreviewController {
                 gainSupported,
                 exposureSupported,
                 autoExposureSupported,
-                exposureBridge == null ? "no exposure bridge" : exposureBridge.describeExposureRange()));
+                nativeExposureAccessReady ? describeExposureRange() : "native exposure access unavailable"));
     }
 
     private void applyCameraControls(String reason) {
@@ -871,3 +887,334 @@ public final class UvcPreviewController {
 
         boolean brightnessApplied = false;
         boolean contrastApplied = false;
+        boolean gainApplied = false;
+        boolean autoExposureApplied = false;
+        boolean exposureApplied = false;
+
+        try {
+            if (brightnessSupported) {
+                activeCamera.setBrightness(brightnessPercent);
+                brightnessApplied = true;
+            }
+        } catch (Throwable ignored) {
+            brightnessApplied = false;
+        }
+        try {
+            if (contrastSupported) {
+                activeCamera.setContrast(contrastPercent);
+                contrastApplied = true;
+            }
+        } catch (Throwable ignored) {
+            contrastApplied = false;
+        }
+        try {
+            if (gainSupported) {
+                activeCamera.setGain(gainPercent);
+                gainApplied = true;
+            }
+        } catch (Throwable ignored) {
+            gainApplied = false;
+        }
+        if (nativeExposureAccessReady) {
+            if (autoExposureSupported) {
+                autoExposureApplied = setAutoExposureEnabled(autoExposureEnabled);
+            }
+            if (exposureSupported && !autoExposureEnabled) {
+                exposureApplied = setExposurePercentOnDevice(exposurePercent);
+            }
+        }
+
+        setControlStatus("Controls applied (" + reason + "). brightness=" + brightnessApplied
+                + "; contrast=" + contrastApplied
+                + "; gain=" + gainApplied
+                + "; AE=" + autoExposureApplied
+                + "; exposure=" + exposureApplied + ".");
+    }
+
+    private void prepareNativeExposureAccess() {
+        clearNativeExposureAccess();
+        try {
+            Class<UVCCamera> cameraClass = UVCCamera.class;
+            exposureNativePointerField = accessibleField(cameraClass, "mNativePtr");
+            exposureMinimumField = accessibleField(cameraClass, "mExposureMin");
+            exposureMaximumField = accessibleField(cameraClass, "mExposureMax");
+            exposureDefaultField = accessibleField(cameraClass, "mExposureDef");
+            exposureModeDefaultField = accessibleField(cameraClass, "mExposureModeDef");
+            updateExposureLimitMethod = accessibleMethod(cameraClass, "nativeUpdateExposureLimit", long.class);
+            getExposureMethod = accessibleMethod(cameraClass, "nativeGetExposure", long.class);
+            setExposureMethod = accessibleMethod(cameraClass, "nativeSetExposure", long.class, int.class);
+            updateExposureModeLimitMethod = accessibleMethod(cameraClass, "nativeUpdateExposureModeLimit", long.class);
+            getExposureModeMethod = accessibleMethod(cameraClass, "nativeGetExposureMode", long.class);
+            setExposureModeMethod = accessibleMethod(cameraClass, "nativeSetExposureMode", long.class, int.class);
+            nativeExposureAccessReady = true;
+        } catch (ReflectiveOperationException ignored) {
+            clearNativeExposureAccess();
+        }
+    }
+
+    private void clearNativeExposureAccess() {
+        exposureNativePointerField = null;
+        exposureMinimumField = null;
+        exposureMaximumField = null;
+        exposureDefaultField = null;
+        exposureModeDefaultField = null;
+        updateExposureLimitMethod = null;
+        getExposureMethod = null;
+        setExposureMethod = null;
+        updateExposureModeLimitMethod = null;
+        getExposureModeMethod = null;
+        setExposureModeMethod = null;
+        nativeExposureAccessReady = false;
+    }
+
+    private boolean isAutoExposureCurrentlyEnabled() {
+        try {
+            updateExposureModeLimit();
+            int currentMode = (Integer) getExposureModeMethod.invoke(null, nativeCameraPointer());
+            return currentMode != MANUAL_EXPOSURE_MODE;
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    private boolean setAutoExposureEnabled(boolean enabled) {
+        try {
+            updateExposureModeLimit();
+            int requestedMode = enabled ? preferredAutoExposureMode() : MANUAL_EXPOSURE_MODE;
+            setExposureModeMethod.invoke(null, nativeCameraPointer(), requestedMode);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private int getExposurePercentFromDevice() {
+        try {
+            updateExposureLimit();
+            int rawExposure = (Integer) getExposureMethod.invoke(null, nativeCameraPointer());
+            return rawExposureToPercent(rawExposure);
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    private boolean setExposurePercentOnDevice(int percent) {
+        try {
+            updateExposureLimit();
+            int rawExposure = percentToRawExposure(clamp(percent, 0, 100));
+            setExposureMethod.invoke(null, nativeCameraPointer(), rawExposure);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private String describeExposureRange() {
+        try {
+            updateExposureLimit();
+            return "raw min=" + exposureMinimumField.getInt(activeCamera)
+                    + ", max=" + exposureMaximumField.getInt(activeCamera)
+                    + ", def=" + exposureDefaultField.getInt(activeCamera);
+        } catch (Throwable ignored) {
+            return "raw range unavailable";
+        }
+    }
+
+    private void updateExposureLimit() throws ReflectiveOperationException {
+        updateExposureLimitMethod.invoke(activeCamera, nativeCameraPointer());
+    }
+
+    private void updateExposureModeLimit() throws ReflectiveOperationException {
+        updateExposureModeLimitMethod.invoke(activeCamera, nativeCameraPointer());
+    }
+
+    private long nativeCameraPointer() throws IllegalAccessException {
+        return exposureNativePointerField.getLong(activeCamera);
+    }
+
+    private int preferredAutoExposureMode() throws IllegalAccessException {
+        int defaultMode = exposureModeDefaultField.getInt(activeCamera);
+        return defaultMode == MANUAL_EXPOSURE_MODE ? AUTO_EXPOSURE_MODE : defaultMode;
+    }
+
+    private int rawExposureToPercent(int rawExposure) throws IllegalAccessException {
+        int minimum = exposureMinimumField.getInt(activeCamera);
+        int maximum = exposureMaximumField.getInt(activeCamera);
+        int range = Math.abs(maximum - minimum);
+        if (range <= 0) {
+            return 0;
+        }
+        return clamp(Math.round((rawExposure - minimum) * 100.0f / range), 0, 100);
+    }
+
+    private int percentToRawExposure(int percent) throws IllegalAccessException {
+        int minimum = exposureMinimumField.getInt(activeCamera);
+        int maximum = exposureMaximumField.getInt(activeCamera);
+        return Math.round(minimum + (Math.abs(maximum - minimum) * percent / 100.0f));
+    }
+
+    private static Field accessibleField(Class<?> cls, String name) throws NoSuchFieldException {
+        Field field = cls.getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
+    }
+
+    private static Method accessibleMethod(Class<?> cls, String name, Class<?>... parameterTypes) throws NoSuchMethodException {
+        Method method = cls.getDeclaredMethod(name, parameterTypes);
+        method.setAccessible(true);
+        return method;
+    }
+
+    private void applyDisplaySideImageFilter() {
+        float contrastScale = Math.max(0.05f, contrastPercent / 50.0f);
+        float brightnessOffset = (brightnessPercent - 50) * 2.55f;
+
+        ColorMatrix colorMatrix = new ColorMatrix();
+        if (blackWhiteEnabled) {
+            colorMatrix.setSaturation(0.0f);
+        }
+        colorMatrix.postConcat(new ColorMatrix(new float[]{
+                contrastScale, 0, 0, 0, brightnessOffset,
+                0, contrastScale, 0, 0, brightnessOffset,
+                0, 0, contrastScale, 0, brightnessOffset,
+                0, 0, 0, 1, 0
+        }));
+
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        paint.setColorFilter(new ColorMatrixColorFilter(colorMatrix));
+        previewTextureView.setLayerType(View.LAYER_TYPE_HARDWARE, paint);
+        previewTextureView.invalidate();
+    }
+
+    private void updateControlPanelCollapsedState() {
+        if (controlPanel == null) {
+            return;
+        }
+        for (int index = 1; index < controlPanel.getChildCount(); index++) {
+            controlPanel.getChildAt(index).setVisibility(controlPanelCollapsed ? View.GONE : View.VISIBLE);
+        }
+        ((TextView) controlPanel.getChildAt(0)).setText(
+                controlPanelCollapsed ? "Camera image controls  ▼" : "Camera image controls  ▲");
+    }
+
+    private void removeControlPanel() {
+        if (controlPanel == null) {
+            return;
+        }
+        ViewGroup parent = (ViewGroup) controlPanel.getParent();
+        if (parent != null) {
+            parent.removeView(controlPanel);
+        }
+        controlPanel = null;
+    }
+
+    private void setControlStatus(String text) {
+        if (cameraStatusTextView != null) {
+            cameraStatusTextView.setText(text);
+        }
+        notifyStatus(text);
+    }
+
+    private TextView createTextView(String text, int sizeSp, boolean bold) {
+        TextView textView = new TextView(context);
+        textView.setText(text);
+        textView.setTextSize(sizeSp);
+        textView.setTextColor(Color.rgb(243, 245, 247));
+        textView.setPadding(0, dp(2), 0, dp(2));
+        if (bold) {
+            textView.setTypeface(textView.getTypeface(), android.graphics.Typeface.BOLD);
+        }
+        return textView;
+    }
+
+    private TextView createValueTextView() {
+        TextView textView = createTextView("—", 11, false);
+        textView.setGravity(Gravity.END);
+        return textView;
+    }
+
+    private CheckBox createCheckBox(String label) {
+        CheckBox checkBox = new CheckBox(context);
+        checkBox.setText(label);
+        checkBox.setTextColor(Color.rgb(243, 245, 247));
+        checkBox.setTextSize(12);
+        return checkBox;
+    }
+
+    private void rememberDetectedDevice(UsbDevice device) {
+        if (device != null) {
+            detectedUvcDevicesById.put(device.getDeviceId(), device);
+        }
+    }
+
+    private UsbDevice getFirstDetectedUvcDevice() {
+        for (UsbDevice device : detectedUvcDevicesById.values()) {
+            return device;
+        }
+        return null;
+    }
+
+    private boolean isUvcVideoDevice(UsbDevice device) {
+        if (device == null) {
+            return false;
+        }
+        for (int index = 0; index < device.getInterfaceCount(); index++) {
+            UsbInterface usbInterface = device.getInterface(index);
+            if (usbInterface != null && usbInterface.getInterfaceClass() == USB_VIDEO_CLASS) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String describeDeviceBrief(UsbDevice device) {
+        return String.format(Locale.US, "VID %04x / PID %04x", device.getVendorId(), device.getProductId());
+    }
+
+    private String describeDeviceLong(UsbDevice device) {
+        return String.format(Locale.US, "VID %04x / PID %04x, interfaces=%d, name=%s",
+                device.getVendorId(), device.getProductId(), device.getInterfaceCount(), device.getDeviceName());
+    }
+
+    private String formatName(int frameFormat) {
+        return frameFormat == UVCCamera.FRAME_FORMAT_MJPEG ? "MJPEG/compressed" : "YUYV/uncompressed";
+    }
+
+    private String describeThrowable(Throwable throwable) {
+        String message = throwable.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            message = "no detail message";
+        }
+        return throwable.getClass().getSimpleName() + ": " + message;
+    }
+
+    private void notifyStatus(final String statusText) {
+        mainThreadHandler.post(new Runnable() {
+            @Override public void run() {
+                if (listener != null) {
+                    listener.onUvcStatusChanged(statusText);
+                }
+            }
+        });
+    }
+
+    private int dp(int value) {
+        return Math.round(value * context.getResources().getDisplayMetrics().density);
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static final class PreviewMode {
+        final int width;
+        final int height;
+        final int frameFormat;
+
+        PreviewMode(int width, int height, int frameFormat) {
+            this.width = width;
+            this.height = height;
+            this.frameFormat = frameFormat;
+        }
+    }
+}
