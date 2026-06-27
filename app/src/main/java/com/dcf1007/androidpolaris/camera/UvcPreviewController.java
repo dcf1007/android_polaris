@@ -1,9 +1,6 @@
 package com.dcf1007.androidpolaris.camera;
 
 import android.content.Context;
-import android.graphics.ColorMatrix;
-import android.graphics.ColorMatrixColorFilter;
-import android.graphics.Paint;
 import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
@@ -123,7 +120,6 @@ public final class UvcPreviewController {
         }
     }
 
-    private final Context context;
     private final Handler mainThreadHandler = new Handler(Looper.getMainLooper());
     private final FrameLayout previewContainer;
     private final TextureView previewTextureView;
@@ -138,7 +134,6 @@ public final class UvcPreviewController {
     private boolean usbMonitorRegistered;
     private boolean openRetryScheduled;
 
-    private String supportedSizeJson;
     private List<StreamMode> availableStreamModes = new ArrayList<>();
     private StreamMode activeStreamMode;
     private StreamMode requestedStreamMode;
@@ -148,7 +143,6 @@ public final class UvcPreviewController {
     private int gainPercent = 0;
     private int exposurePercent = 50;
     private boolean autoExposureEnabled = true;
-    private boolean blackWhiteEnabled;
 
     private boolean brightnessSupported;
     private boolean contrastSupported;
@@ -170,7 +164,6 @@ public final class UvcPreviewController {
     private boolean nativeExposureAccessReady;
 
     public UvcPreviewController(Context context, FrameLayout previewContainer, Listener listener) {
-        this.context = context;
         this.previewContainer = previewContainer;
         this.listener = listener;
         this.previewTextureView = new TextureView(context);
@@ -255,7 +248,6 @@ public final class UvcPreviewController {
             activeCamera = null;
             activeControlBlock = null;
             activeStreamMode = null;
-            supportedSizeJson = null;
             availableStreamModes = new ArrayList<>();
             brightnessSupported = false;
             contrastSupported = false;
@@ -308,15 +300,12 @@ public final class UvcPreviewController {
             int contrastPercent,
             int gainPercent,
             int exposurePercent,
-            boolean autoExposureEnabled,
-            boolean blackWhiteEnabled) {
+            boolean autoExposureEnabled) {
         this.brightnessPercent = clamp(brightnessPercent, 0, 100);
         this.contrastPercent = clamp(contrastPercent, 0, 100);
         this.gainPercent = clamp(gainPercent, 0, 100);
         this.exposurePercent = clamp(exposurePercent, 0, 100);
         this.autoExposureEnabled = autoExposureEnabled;
-        this.blackWhiteEnabled = blackWhiteEnabled;
-        applyDisplaySideImageFilter();
         applyCameraControls("main panel control change");
     }
 
@@ -396,7 +385,7 @@ public final class UvcPreviewController {
         try {
             UVCCamera camera = new UVCCamera();
             camera.open(controlBlock);
-            supportedSizeJson = camera.getSupportedSize();
+            String supportedSizeJson = camera.getSupportedSize();
             availableStreamModes = queryStreamModes(supportedSizeJson);
             StreamMode selectedMode = keepRequestedMode && requestedStreamMode != null
                     ? findEquivalentModeOrDefault(requestedStreamMode)
@@ -412,8 +401,7 @@ public final class UvcPreviewController {
             pendingOpenDevice = device;
             activeStreamMode = selectedMode;
             requestedStreamMode = selectedMode;
-            prepareNativeExposureAccess();
-            queryControlSupportAndCurrentValues();
+            queryDeviceCapabilitiesAfterOpen(camera);
             applyCameraControls("camera opened");
             applyPreviewFitMode();
             publishCapabilities("UVC capabilities queried. Preview opened at " + selectedMode.fullLabel() + ".");
@@ -421,6 +409,20 @@ public final class UvcPreviewController {
             activeCamera = null;
             clearNativeExposureAccess();
             publishCapabilities("Failed to open/query direct libuvc camera: " + describeThrowable(throwable));
+        }
+    }
+
+    private void queryDeviceCapabilitiesAfterOpen(UVCCamera camera) {
+        prepareNativeExposureAccess();
+        brightnessSupported = camera != null && checkControlSupport(UVCCamera.PU_BRIGHTNESS);
+        contrastSupported = camera != null && checkControlSupport(UVCCamera.PU_CONTRAST);
+        gainSupported = camera != null && checkControlSupport(UVCCamera.PU_GAIN);
+        exposureSupported = nativeExposureAccessReady && checkControlSupport(UVCCamera.CTRL_AE_ABS);
+        autoExposureSupported = nativeExposureAccessReady && checkControlSupport(UVCCamera.CTRL_AE);
+        if (autoExposureSupported) autoExposureEnabled = isAutoExposureCurrentlyEnabled();
+        if (exposureSupported) {
+            int queriedExposure = getExposurePercentFromDevice();
+            if (queriedExposure >= 0) exposurePercent = queriedExposure;
         }
     }
 
@@ -482,25 +484,11 @@ public final class UvcPreviewController {
         return chooseDefaultStreamMode();
     }
 
-    private void queryControlSupportAndCurrentValues() {
-        brightnessSupported = activeCamera != null && checkControlSupport(UVCCamera.PU_BRIGHTNESS);
-        contrastSupported = activeCamera != null && checkControlSupport(UVCCamera.PU_CONTRAST);
-        gainSupported = activeCamera != null && checkControlSupport(UVCCamera.PU_GAIN);
-        exposureSupported = nativeExposureAccessReady && checkControlSupport(UVCCamera.CTRL_AE_ABS);
-        autoExposureSupported = nativeExposureAccessReady && checkControlSupport(UVCCamera.CTRL_AE);
-        if (autoExposureSupported) autoExposureEnabled = isAutoExposureCurrentlyEnabled();
-        if (exposureSupported) {
-            int queriedExposure = getExposurePercentFromDevice();
-            if (queriedExposure >= 0) exposurePercent = queriedExposure;
-        }
-    }
-
     private boolean checkControlSupport(long supportFlag) {
         try { return activeCamera.checkSupportFlag(supportFlag); } catch (Throwable ignored) { return false; }
     }
 
     private void applyCameraControls(String reason) {
-        applyDisplaySideImageFilter();
         if (activeCamera == null) return;
         try { if (brightnessSupported) activeCamera.setBrightness(brightnessPercent); } catch (Throwable ignored) { }
         try { if (contrastSupported) activeCamera.setContrast(contrastPercent); } catch (Throwable ignored) { }
@@ -640,23 +628,6 @@ public final class UvcPreviewController {
         Method method = cls.getDeclaredMethod(name, parameterTypes);
         method.setAccessible(true);
         return method;
-    }
-
-    private void applyDisplaySideImageFilter() {
-        float contrastScale = Math.max(0.05f, contrastPercent / 50.0f);
-        float brightnessOffset = (brightnessPercent - 50) * 2.55f;
-        ColorMatrix colorMatrix = new ColorMatrix();
-        if (blackWhiteEnabled) colorMatrix.setSaturation(0.0f);
-        colorMatrix.postConcat(new ColorMatrix(new float[]{
-                contrastScale, 0, 0, 0, brightnessOffset,
-                0, contrastScale, 0, 0, brightnessOffset,
-                0, 0, contrastScale, 0, brightnessOffset,
-                0, 0, 0, 1, 0
-        }));
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        paint.setColorFilter(new ColorMatrixColorFilter(colorMatrix));
-        previewTextureView.setLayerType(View.LAYER_TYPE_HARDWARE, paint);
-        previewTextureView.invalidate();
     }
 
     private void applyPreviewFitModeLater() {
