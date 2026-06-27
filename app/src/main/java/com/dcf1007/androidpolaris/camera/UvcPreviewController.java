@@ -341,7 +341,7 @@ public final class UvcPreviewController {
                     publishCapabilities("UVC attached: " + describeDeviceBrief(device) + ".");
                 }
             }
-            @Override public void onDettach(UsbDevice device) {
+            @Override public void onDetach(UsbDevice device) {
                 if (device != null) detectedUvcDevicesById.remove(device.getDeviceId());
                 closeActiveCamera();
                 publishCapabilities("UVC detached" + (device == null ? "." : ": " + device.getDeviceName()));
@@ -386,7 +386,7 @@ public final class UvcPreviewController {
             UVCCamera camera = new UVCCamera();
             camera.open(controlBlock);
             String supportedSizeJson = camera.getSupportedSize();
-            availableStreamModes = queryStreamModes(supportedSizeJson);
+            availableStreamModes = queryStreamModes(camera, supportedSizeJson);
             StreamMode selectedMode = keepRequestedMode && requestedStreamMode != null
                     ? findEquivalentModeOrDefault(requestedStreamMode)
                     : chooseDefaultStreamMode();
@@ -426,15 +426,15 @@ public final class UvcPreviewController {
         }
     }
 
-    private List<StreamMode> queryStreamModes(String sizeJson) {
+    private List<StreamMode> queryStreamModes(UVCCamera camera, String sizeJson) {
         List<StreamMode> modes = new ArrayList<>();
-        appendModesForFormat(modes, sizeJson, UVCCamera.FRAME_FORMAT_YUYV);
-        appendModesForFormat(modes, sizeJson, UVCCamera.FRAME_FORMAT_MJPEG);
+        appendModesForFormat(modes, camera, sizeJson, UVCCamera.FRAME_FORMAT_YUYV);
+        appendModesForFormat(modes, camera, sizeJson, UVCCamera.FRAME_FORMAT_MJPEG);
         return modes;
     }
 
-    private void appendModesForFormat(List<StreamMode> modes, String sizeJson, int frameFormat) {
-        List<Size> sizes = getSizesForFormat(sizeJson, frameFormat);
+    private void appendModesForFormat(List<StreamMode> modes, UVCCamera camera, String sizeJson, int frameFormat) {
+        List<Size> sizes = getSizesForFormat(camera, sizeJson, frameFormat);
         if (sizes == null) return;
         for (Size size : sizes) {
             List<Integer> fpsValues = fpsValuesForSize(size);
@@ -454,11 +454,11 @@ public final class UvcPreviewController {
         return values;
     }
 
-    private List<Size> getSizesForFormat(String sizeJson, int frameFormat) {
-        if (sizeJson == null || sizeJson.trim().isEmpty()) return null;
+    private List<Size> getSizesForFormat(UVCCamera camera, String sizeJson, int frameFormat) {
+        if (camera == null || sizeJson == null || sizeJson.trim().isEmpty()) return null;
         int streamType = frameFormat == UVCCamera.FRAME_FORMAT_MJPEG ? STREAM_TYPE_MJPEG : STREAM_TYPE_YUYV;
         try {
-            return UVCCamera.getSupportedSize(streamType, sizeJson);
+            return camera.getSupportedSize(streamType, sizeJson);
         } catch (Throwable ignored) {
             return null;
         }
