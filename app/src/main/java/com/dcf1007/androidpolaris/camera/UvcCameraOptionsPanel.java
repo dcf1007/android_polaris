@@ -47,6 +47,8 @@ final class UvcCameraOptionsPanel {
     private CheckBox autoExposureCheckBox;
     private boolean collapsed;
     private boolean binding;
+    private boolean lastCameraOpen;
+    private boolean lastExposureSupported;
     private List<UvcPreviewController.StreamMode> streamModes = new ArrayList<>();
     private UvcPreviewController.StreamMode activeStreamMode;
 
@@ -67,7 +69,10 @@ final class UvcCameraOptionsPanel {
         if (panel == null || capabilities == null) return;
 
         binding = true;
+        lastCameraOpen = capabilities.cameraOpen;
+        lastExposureSupported = capabilities.exposureSupported;
         activeStreamMode = capabilities.activeStreamMode;
+
         List<UvcPreviewController.StreamMode> queriedModes = new ArrayList<>(capabilities.streamModes);
         if (!sameModeList(streamModes, queriedModes)) {
             streamModes = queriedModes;
@@ -89,8 +94,8 @@ final class UvcCameraOptionsPanel {
         gainSeekBar.setEnabled(capabilities.cameraOpen && capabilities.gainSupported);
         autoExposureCheckBox.setEnabled(capabilities.cameraOpen && capabilities.autoExposureSupported);
         autoExposureCheckBox.setChecked(capabilities.autoExposureEnabled);
-        exposureSeekBar.setEnabled(capabilities.cameraOpen && capabilities.exposureSupported && !capabilities.autoExposureEnabled);
         exposureSeekBar.setProgress(clamp(capabilities.exposurePercent, 0, 100));
+        updateExposureSliderEnabledState(capabilities.autoExposureEnabled);
 
         updateValueLabels();
         capabilitySummaryView.setText(buildCapabilitySummary(capabilities));
@@ -199,7 +204,9 @@ final class UvcCameraOptionsPanel {
                 applyCameraControls();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
-            @Override public void onStopTrackingTouch(SeekBar seekBar) { applyCameraControls(); }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                if (!binding) applyCameraControls();
+            }
         };
         brightnessSeekBar.setOnSeekBarChangeListener(sliderListener);
         contrastSeekBar.setOnSeekBarChangeListener(sliderListener);
@@ -208,6 +215,7 @@ final class UvcCameraOptionsPanel {
         autoExposureCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
                 if (binding) return;
+                updateExposureSliderEnabledState(isChecked);
                 applyCameraControls();
             }
         });
@@ -226,6 +234,12 @@ final class UvcCameraOptionsPanel {
         seekBar.setEnabled(false);
         parent.addView(seekBar, new LinearLayout.LayoutParams(-1, -2));
         return seekBar;
+    }
+
+    private void updateExposureSliderEnabledState(boolean autoExposureEnabled) {
+        if (exposureSeekBar != null) {
+            exposureSeekBar.setEnabled(lastCameraOpen && lastExposureSupported && !autoExposureEnabled);
+        }
     }
 
     private void applyCameraControls() {
