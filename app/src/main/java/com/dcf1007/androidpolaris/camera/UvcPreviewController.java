@@ -29,10 +29,15 @@ import java.util.Map;
 /**
  * Direct UVC backend.
  *
- * <p>This class owns USB monitoring, USB permission, direct UVCCamera opening,
- * UVC capability queries, stream selection, preview fitting, and hardware-side
- * camera controls. The visible options panel and local log saving are delegated
- * to small package helpers to keep this backend readable.</p>
+ * <p>The lifecycle is deliberately split into two phases:</p>
+ * <ol>
+ *     <li>USB permission + camera open for capability query only.</li>
+ *     <li>Preview start with a user-selected stream mode.</li>
+ * </ol>
+ *
+ * <p>Changing resolution/format/FPS is handled by closing the current UVCCamera object and
+ * reopening it with the selected stream mode. The code avoids mutating preview size on a live
+ * stream because that is a common source of UVC hangs with some cameras and phones.</p>
  */
 public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
@@ -81,14 +86,14 @@ public final class UvcPreviewController {
             return resolutionLabel() + " " + formatLabel() + " @ " + fpsLabel();
         }
 
-        @Override public String toString() {
-            return fullLabel();
-        }
+        @Override public String toString() { return fullLabel(); }
     }
 
     public static final class UvcCapabilities {
         public final boolean cameraOpen;
+        public final boolean previewRunning;
         public final List<StreamMode> streamModes;
+        public final StreamMode selectedStreamMode;
         public final StreamMode activeStreamMode;
         public final boolean brightnessSupported;
         public final boolean contrastSupported;
@@ -102,7 +107,9 @@ public final class UvcPreviewController {
 
         UvcCapabilities(
                 boolean cameraOpen,
+                boolean previewRunning,
                 List<StreamMode> streamModes,
+                StreamMode selectedStreamMode,
                 StreamMode activeStreamMode,
                 boolean brightnessSupported,
                 boolean contrastSupported,
@@ -114,7 +121,9 @@ public final class UvcPreviewController {
                 String exposureRangeText,
                 String statusText) {
             this.cameraOpen = cameraOpen;
+            this.previewRunning = previewRunning;
             this.streamModes = Collections.unmodifiableList(new ArrayList<>(streamModes));
+            this.selectedStreamMode = selectedStreamMode;
             this.activeStreamMode = activeStreamMode;
             this.brightnessSupported = brightnessSupported;
             this.contrastSupported = contrastSupported;
@@ -143,7 +152,9 @@ public final class UvcPreviewController {
     private UVCCamera activeCamera;
     private PreviewFitMode previewFitMode = PreviewFitMode.COVER;
     private boolean usbMonitorRegistered;
-    private boolean openRetryScheduled;
+    private boolean previewStartRetryScheduled;
+    private boolean previewStartPendingUntilSurfaceReady;
+    private boolean previewRunning;
 
     private List<StreamMode> availableStreamModes = new ArrayList<>();
     private StreamMode activeStreamMode;
@@ -181,9 +192,9 @@ public final class UvcPreviewController {
         this.previewTextureView = new TextureView(context);
         this.usbMonitor = new USBMonitor(context, createUsbConnectionListener());
         configurePreviewTextureView();
-        this.cameraOptionsPanel = new UvcCameraOptionsPanel(context, this);
+        cameraOptionsPanel = new UvcCameraOptionsPanel(context, this);
         applyPreviewFitModeLater();
-        publishCapabilities("UVC backend ready. USB has not been scanned yet.");
+        publishCapabilities("UVC backend ready. Press Open/Query USB UVC camera to detect capabilities.");
     }
 
     public boolean register() {
@@ -237,6 +248,7 @@ public final class UvcPreviewController {
         return !detectedUvcDevicesById.isEmpty();
     }
 
+    /** Requests USB permission. The connect callback queries capabilities only; it does not start preview. */
     public void requestPermissionAndOpenFirstCamera() {
         if (!register()) return;
         refreshDetectedUvcDeviceCache();
@@ -246,7 +258,7 @@ public final class UvcPreviewController {
             return;
         }
         pendingOpenDevice = firstDevice;
-        publishCapabilities("UVC detected: " + describeDeviceBrief(firstDevice) + ". Requesting USB permission…");
+        publishCapabilities("UVC detected: " + describeDeviceBrief(firstDevice) + ". Requesting USB permission for capability query…");
         try {
             if (usbMonitor.requestPermission(firstDevice)) {
                 publishCapabilities("USB permission request could not start. Reconnect the camera and try again.");
@@ -257,24 +269,15 @@ public final class UvcPreviewController {
     }
 
     public void closeActiveCamera() {
-        try {
-            if (activeCamera != null) activeCamera.destroy();
-        } catch (Throwable throwable) {
-            notifyStatus("Direct libuvc close warning: " + describeThrowable(throwable));
-        } finally {
-            activeCamera = null;
-            activeControlBlock = null;
-            activeStreamMode = null;
-            availableStreamModes = new ArrayList<>();
-            brightnessSupported = false;
-            contrastSupported = false;
-            gainSupported = false;
-            exposureSupported = false;
-            autoExposureSupported = false;
-            clearNativeExposureAccess();
-            openRetryScheduled = false;
-            publishCapabilities("UVC camera closed.");
-        }
+        closeCurrentCameraWithoutPublishing();
+        availableStreamModes = new ArrayList<>();
+        requestedStreamMode = null;
+        brightnessSupported = false;
+        contrastSupported = false;
+        gainSupported = false;
+        exposureSupported = false;
+        autoExposureSupported = false;
+        publishCapabilities("UVC camera closed.");
     }
 
     public String describeConnectedUvcDevices() {
@@ -283,8 +286,10 @@ public final class UvcPreviewController {
         StringBuilder builder = new StringBuilder();
         builder.append(detectedUvcDevicesById.size()).append(" raw UVC device(s) detected:\n");
         for (UsbDevice device : detectedUvcDevicesById.values()) builder.append(describeDeviceLong(device)).append('\n');
-        if (activeStreamMode != null) {
-            builder.append("Active stream: ").append(activeStreamMode.fullLabel()).append('\n');
+        if (!availableStreamModes.isEmpty()) {
+            builder.append(previewRunning ? "Preview running" : "Capabilities queried; preview stopped").append('\n');
+            if (activeStreamMode != null) builder.append("Active stream: ").append(activeStreamMode.fullLabel()).append('\n');
+            if (requestedStreamMode != null) builder.append("Selected stream: ").append(requestedStreamMode.fullLabel()).append('\n');
             builder.append("Controls: brightness=").append(brightnessSupported)
                     .append(", contrast=").append(contrastSupported)
                     .append(", gain=").append(gainSupported)
@@ -296,7 +301,7 @@ public final class UvcPreviewController {
     }
 
     public UvcCapabilities getCurrentCapabilities() {
-        return buildCapabilities(activeCamera == null ? "No UVC camera open." : "UVC capabilities queried.");
+        return buildCapabilities(activeCamera == null ? "No UVC camera open." : previewRunning ? "UVC preview running." : "UVC capabilities queried; preview not started.");
     }
 
     public void setPreviewFitMode(PreviewFitMode fitMode) {
@@ -304,12 +309,34 @@ public final class UvcPreviewController {
         applyPreviewFitMode();
     }
 
+    /** Stores the requested stream. Preview starts/restarts only when the user presses the start/apply button. */
     public void selectStreamMode(StreamMode streamMode) {
-        if (streamMode == null || sameStreamMode(streamMode, activeStreamMode)) return;
-        requestedStreamMode = streamMode;
-        if (activeCamera != null) {
-            switchPreviewStreamMode(streamMode);
+        if (streamMode == null) return;
+        requestedStreamMode = findEquivalentModeOrDefault(streamMode);
+        String action = previewRunning ? "Press Start/apply selected stream to reopen safely." : "Press Start selected stream to open preview.";
+        publishCapabilities("Selected UVC stream: " + requestedStreamMode.fullLabel() + ". " + action);
+    }
+
+    /** Starts the selected stream. If a stream is already running, closes and reopens the camera first. */
+    void startSelectedStream() {
+        if (activeControlBlock == null || pendingOpenDevice == null) {
+            publishCapabilities("No permitted UVC camera is available. Press Open/Query USB UVC camera first.");
+            return;
         }
+        if (requestedStreamMode == null) {
+            requestedStreamMode = chooseDefaultStreamMode();
+        }
+        if (requestedStreamMode == null) {
+            publishCapabilities("No UVC stream mode is available to start.");
+            return;
+        }
+        if (!previewTextureView.isAvailable() || previewTextureView.getSurfaceTexture() == null) {
+            previewStartPendingUntilSurfaceReady = true;
+            schedulePreviewStartRetry();
+            publishCapabilities("Preview surface is not ready. Selected stream will start when the surface is available.");
+            return;
+        }
+        startPreviewByReopeningCamera(requestedStreamMode);
     }
 
     public void setCameraControls(
@@ -351,7 +378,7 @@ public final class UvcPreviewController {
         previewTextureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override public void onSurfaceTextureAvailable(SurfaceTexture surfaceTexture, int width, int height) {
                 applyPreviewFitMode();
-                if (pendingOpenDevice != null && activeControlBlock != null) openCameraWhenSurfaceIsReady(pendingOpenDevice, activeControlBlock);
+                if (previewStartPendingUntilSurfaceReady) startSelectedStream();
             }
             @Override public void onSurfaceTextureSizeChanged(SurfaceTexture surfaceTexture, int width, int height) { applyPreviewFitMode(); }
             @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture surfaceTexture) { closeActiveCamera(); return true; }
@@ -377,7 +404,7 @@ public final class UvcPreviewController {
                 rememberDetectedDevice(device);
                 pendingOpenDevice = device;
                 activeControlBlock = controlBlock;
-                openCameraWhenSurfaceIsReady(device, controlBlock);
+                queryCapabilitiesOnly(device, controlBlock);
             }
             @Override public void onDisconnect(UsbDevice device, USBMonitor.UsbControlBlock controlBlock) {
                 closeActiveCamera();
@@ -390,64 +417,64 @@ public final class UvcPreviewController {
         };
     }
 
-    private void openCameraWhenSurfaceIsReady(final UsbDevice device, final USBMonitor.UsbControlBlock controlBlock) {
-        mainThreadHandler.post(new Runnable() {
-            @Override public void run() {
-                if (!previewTextureView.isAvailable() || previewTextureView.getSurfaceTexture() == null) {
-                    scheduleOpenRetry(device, controlBlock);
-                    return;
-                }
-                openDirectUvcCamera(device, controlBlock, false);
-            }
-        });
-    }
-
-    private void openDirectUvcCamera(UsbDevice device, USBMonitor.UsbControlBlock controlBlock, boolean keepRequestedMode) {
-        try {
-            if (activeCamera != null) activeCamera.destroy();
-        } catch (Throwable ignored) { }
-        activeCamera = null;
-        clearNativeExposureAccess();
+    private void queryCapabilitiesOnly(UsbDevice device, USBMonitor.UsbControlBlock controlBlock) {
+        closeCurrentCameraWithoutPublishing();
         try {
             UVCCamera camera = new UVCCamera();
             camera.open(controlBlock);
-            String supportedSizeJson = camera.getSupportedSize();
-            availableStreamModes = queryStreamModes(camera, supportedSizeJson);
-            StreamMode selectedMode = keepRequestedMode && requestedStreamMode != null
-                    ? findEquivalentModeOrDefault(requestedStreamMode)
-                    : chooseDefaultStreamMode();
-            if (selectedMode == null) throw new IllegalStateException("No supported UVC preview mode reported by camera");
-            startPreviewWithMode(camera, selectedMode);
             activeCamera = camera;
             activeControlBlock = controlBlock;
             pendingOpenDevice = device;
-            activeStreamMode = selectedMode;
-            requestedStreamMode = selectedMode;
+            previewRunning = false;
+            activeStreamMode = null;
+            availableStreamModes = queryStreamModes(camera, camera.getSupportedSize());
+            if (requestedStreamMode == null) requestedStreamMode = chooseDefaultStreamMode();
+            else requestedStreamMode = findEquivalentModeOrDefault(requestedStreamMode);
             queryDeviceCapabilitiesAfterOpen(camera);
-            applyCameraControls("camera opened");
-            applyPreviewFitMode();
-            publishCapabilities("UVC capabilities queried. Preview opened at " + selectedMode.fullLabel() + ".");
+            applyCameraControls("capability query");
+            publishCapabilities("UVC capabilities queried. Select a stream mode, then press Start selected stream.");
         } catch (Throwable throwable) {
-            activeCamera = null;
-            clearNativeExposureAccess();
-            publishCapabilities("Failed to open/query direct libuvc camera: " + describeThrowable(throwable));
+            closeCurrentCameraWithoutPublishing();
+            publishCapabilities("Failed to query direct libuvc camera: " + describeThrowable(throwable));
         }
     }
 
-    private void switchPreviewStreamMode(StreamMode requestedMode) {
-        StreamMode previousMode = activeStreamMode;
+    private void startPreviewByReopeningCamera(StreamMode requestedMode) {
+        previewStartPendingUntilSurfaceReady = false;
+        publishCapabilities((previewRunning ? "Reopening" : "Starting") + " UVC preview at " + requestedMode.fullLabel() + "…");
+        closeCurrentCameraWithoutPublishing();
         try {
-            publishCapabilities("Switching UVC stream to " + requestedMode.fullLabel() + "…");
-            activeCamera.stopPreview();
-            startPreviewWithMode(activeCamera, requestedMode);
-            activeStreamMode = requestedMode;
-            requestedStreamMode = requestedMode;
-            applyCameraControls("stream mode changed");
+            UVCCamera camera = new UVCCamera();
+            camera.open(activeControlBlock);
+            activeCamera = camera;
+            availableStreamModes = queryStreamModes(camera, camera.getSupportedSize());
+            requestedStreamMode = findEquivalentModeOrDefault(requestedMode);
+            if (requestedStreamMode == null) throw new IllegalStateException("Selected UVC stream mode is no longer available");
+            startPreviewWithMode(camera, requestedStreamMode);
+            activeStreamMode = requestedStreamMode;
+            previewRunning = true;
+            queryDeviceCapabilitiesAfterOpen(camera);
+            applyCameraControls("preview started");
             applyPreviewFitMode();
-            publishCapabilities("UVC stream switched to " + requestedMode.fullLabel() + ".");
+            publishCapabilities("UVC preview running at " + activeStreamMode.fullLabel() + ".");
         } catch (Throwable throwable) {
-            activeStreamMode = previousMode;
-            publishCapabilities("Failed to switch UVC stream mode: " + describeThrowable(throwable));
+            closeCurrentCameraWithoutPublishing();
+            publishCapabilities("Failed to start selected UVC stream: " + describeThrowable(throwable));
+        }
+    }
+
+    private void closeCurrentCameraWithoutPublishing() {
+        try {
+            if (activeCamera != null) activeCamera.destroy();
+        } catch (Throwable throwable) {
+            notifyStatus("Direct libuvc close warning: " + describeThrowable(throwable));
+        } finally {
+            activeCamera = null;
+            activeStreamMode = null;
+            previewRunning = false;
+            previewStartRetryScheduled = false;
+            previewStartPendingUntilSurfaceReady = false;
+            clearNativeExposureAccess();
         }
     }
 
@@ -522,8 +549,10 @@ public final class UvcPreviewController {
     }
 
     private StreamMode findEquivalentModeOrDefault(StreamMode requestedMode) {
-        for (StreamMode mode : availableStreamModes) {
-            if (sameStreamMode(mode, requestedMode)) return mode;
+        if (requestedMode != null) {
+            for (StreamMode mode : availableStreamModes) {
+                if (sameStreamMode(mode, requestedMode)) return mode;
+            }
         }
         return chooseDefaultStreamMode();
     }
@@ -590,3 +619,267 @@ public final class UvcPreviewController {
 
     private boolean isAutoExposureCurrentlyEnabled() {
         try {
+            updateExposureModeLimit();
+            int currentMode = (Integer) getExposureModeMethod.invoke(null, nativeCameraPointer());
+            return currentMode != MANUAL_EXPOSURE_MODE;
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    private boolean setAutoExposureEnabled(boolean enabled) {
+        try {
+            updateExposureModeLimit();
+            int requestedMode = enabled ? preferredAutoExposureMode() : MANUAL_EXPOSURE_MODE;
+            setExposureModeMethod.invoke(null, nativeCameraPointer(), requestedMode);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private int getExposurePercentFromDevice() {
+        try {
+            updateExposureLimit();
+            int rawExposure = (Integer) getExposureMethod.invoke(null, nativeCameraPointer());
+            return rawExposureToPercent(rawExposure);
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    private boolean setExposurePercentOnDevice(int percent) {
+        try {
+            updateExposureLimit();
+            setExposureMethod.invoke(null, nativeCameraPointer(), percentToRawExposure(percent));
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private String describeExposureRange() {
+        try {
+            updateExposureLimit();
+            return "raw min=" + exposureMinimumField.getInt(activeCamera)
+                    + ", max=" + exposureMaximumField.getInt(activeCamera)
+                    + ", def=" + exposureDefaultField.getInt(activeCamera);
+        } catch (Throwable ignored) {
+            return "raw range unavailable";
+        }
+    }
+
+    private void updateExposureLimit() throws ReflectiveOperationException {
+        updateExposureLimitMethod.invoke(activeCamera, nativeCameraPointer());
+    }
+
+    private void updateExposureModeLimit() throws ReflectiveOperationException {
+        updateExposureModeLimitMethod.invoke(activeCamera, nativeCameraPointer());
+    }
+
+    private long nativeCameraPointer() throws IllegalAccessException {
+        return exposureNativePointerField.getLong(activeCamera);
+    }
+
+    private int preferredAutoExposureMode() throws IllegalAccessException {
+        int defaultMode = exposureModeDefaultField.getInt(activeCamera);
+        return defaultMode == MANUAL_EXPOSURE_MODE ? AUTO_EXPOSURE_MODE : defaultMode;
+    }
+
+    private int rawExposureToPercent(int rawExposure) throws IllegalAccessException {
+        int min = exposureMinimumField.getInt(activeCamera);
+        int max = exposureMaximumField.getInt(activeCamera);
+        int range = Math.abs(max - min);
+        return range <= 0 ? 0 : clamp(Math.round((rawExposure - min) * 100.0f / range), 0, 100);
+    }
+
+    private int percentToRawExposure(int percent) throws IllegalAccessException {
+        int min = exposureMinimumField.getInt(activeCamera);
+        int max = exposureMaximumField.getInt(activeCamera);
+        return Math.round(min + (Math.abs(max - min) * clamp(percent, 0, 100) / 100.0f));
+    }
+
+    private static Field accessibleField(Class<?> cls, String name) throws NoSuchFieldException {
+        Field field = cls.getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
+    }
+
+    private static Method accessibleMethod(Class<?> cls, String name, Class<?>... parameterTypes) throws NoSuchMethodException {
+        Method method = cls.getDeclaredMethod(name, parameterTypes);
+        method.setAccessible(true);
+        return method;
+    }
+
+    private void applyPreviewFitModeLater() {
+        previewTextureView.postDelayed(new Runnable() { @Override public void run() { applyPreviewFitMode(); } }, PREVIEW_SURFACE_RETRY_DELAY_MS);
+    }
+
+    private void applyPreviewFitMode() {
+        previewTextureView.post(new Runnable() { @Override public void run() { applyPreviewFitModeNow(); } });
+    }
+
+    private void applyPreviewFitModeNow() {
+        int cw = previewContainer.getWidth();
+        int ch = previewContainer.getHeight();
+        if (cw <= 0 || ch <= 0) return;
+        float sourceAspect = activeStreamMode != null ? activeStreamMode.width / (float) activeStreamMode.height : DEFAULT_PREVIEW_ASPECT_RATIO;
+        int tw = cw;
+        int th = ch;
+        if (previewFitMode != PreviewFitMode.STRETCH) {
+            boolean containerWide = cw / (float) ch > sourceAspect;
+            if (previewFitMode == PreviewFitMode.CONTAIN) {
+                if (containerWide) { th = ch; tw = Math.round(th * sourceAspect); }
+                else { tw = cw; th = Math.round(tw / sourceAspect); }
+            } else {
+                if (containerWide) { tw = cw; th = Math.round(tw / sourceAspect); }
+                else { th = ch; tw = Math.round(th * sourceAspect); }
+            }
+        }
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) previewTextureView.getLayoutParams();
+        tw = Math.max(1, tw);
+        th = Math.max(1, th);
+        if (params.width != tw || params.height != th || params.gravity != Gravity.CENTER) {
+            params.width = tw;
+            params.height = th;
+            params.gravity = Gravity.CENTER;
+            previewTextureView.setLayoutParams(params);
+        }
+        previewTextureView.setTranslationX(0.0f);
+        previewTextureView.setTranslationY(0.0f);
+        previewTextureView.setScaleX(1.0f);
+        previewTextureView.setScaleY(1.0f);
+        previewTextureView.setPivotX(tw / 2.0f);
+        previewTextureView.setPivotY(th / 2.0f);
+    }
+
+    private void schedulePreviewStartRetry() {
+        if (previewStartRetryScheduled) return;
+        previewStartRetryScheduled = true;
+        previewTextureView.postDelayed(new Runnable() {
+            @Override public void run() {
+                previewStartRetryScheduled = false;
+                if (previewStartPendingUntilSurfaceReady) startSelectedStream();
+            }
+        }, PREVIEW_SURFACE_RETRY_DELAY_MS);
+    }
+
+    private void refreshDetectedUvcDeviceCache() {
+        try {
+            for (UsbDevice device : usbMonitor.getDeviceList()) if (isUvcVideoDevice(device)) rememberDetectedDevice(device);
+        } catch (Throwable throwable) {
+            notifyStatus("USB device scan failed: " + describeThrowable(throwable));
+        }
+    }
+
+    private UvcCapabilities buildCapabilities(String statusText) {
+        return new UvcCapabilities(
+                activeCamera != null,
+                previewRunning,
+                availableStreamModes,
+                requestedStreamMode,
+                activeStreamMode,
+                brightnessSupported,
+                contrastSupported,
+                gainSupported,
+                exposureSupported,
+                autoExposureSupported,
+                exposurePercent,
+                autoExposureEnabled,
+                nativeExposureAccessReady ? describeExposureRange() : "native exposure access unavailable",
+                statusText);
+    }
+
+    private void publishCapabilities(String statusText) {
+        final UvcCapabilities capabilities = buildCapabilities(statusText);
+        notifyStatus(statusText);
+        mainThreadHandler.post(new Runnable() {
+            @Override public void run() {
+                if (cameraOptionsPanel != null) cameraOptionsPanel.update(capabilities);
+                if (listener != null) listener.onUvcCapabilitiesChanged(capabilities);
+            }
+        });
+    }
+
+    private String describeStreamModes() {
+        if (availableStreamModes.isEmpty()) return "No stream modes reported.";
+        StringBuilder builder = new StringBuilder("Stream modes:");
+        int shown = 0;
+        for (StreamMode mode : availableStreamModes) {
+            if (shown >= 16) {
+                builder.append("\n  …");
+                break;
+            }
+            builder.append("\n  • ").append(mode.fullLabel());
+            shown++;
+        }
+        return builder.toString();
+    }
+
+    private String buildDebugExportText() {
+        StringBuilder builder = new StringBuilder();
+        builder.append("Android Polaris UVC debug log\n");
+        builder.append("Generated: ").append(String.format(Locale.US, "%tF %<tT", new Date())).append('\n');
+        builder.append("Device: ").append(Build.MANUFACTURER).append(' ')
+                .append(Build.MODEL).append(" / Android ")
+                .append(Build.VERSION.RELEASE).append('\n');
+        builder.append('\n').append("Current UVC state:\n").append(describeConnectedUvcDevices()).append('\n');
+        builder.append('\n').append("Log:\n")
+                .append(debugLogBuilder.length() == 0 ? "No UVC log lines recorded." : debugLogBuilder.toString().trim());
+        return builder.toString();
+    }
+
+    private void rememberDetectedDevice(UsbDevice device) {
+        if (device != null) detectedUvcDevicesById.put(device.getDeviceId(), device);
+    }
+
+    private UsbDevice getFirstDetectedUvcDevice() {
+        for (UsbDevice device : detectedUvcDevicesById.values()) return device;
+        return null;
+    }
+
+    private boolean isUvcVideoDevice(UsbDevice device) {
+        if (device == null) return false;
+        for (int i = 0; i < device.getInterfaceCount(); i++) {
+            UsbInterface usbInterface = device.getInterface(i);
+            if (usbInterface != null && usbInterface.getInterfaceClass() == USB_VIDEO_CLASS) return true;
+        }
+        return false;
+    }
+
+    private String describeDeviceBrief(UsbDevice device) {
+        return String.format(Locale.US, "VID %04x / PID %04x", device.getVendorId(), device.getProductId());
+    }
+
+    private String describeDeviceLong(UsbDevice device) {
+        return String.format(Locale.US, "VID %04x / PID %04x, interfaces=%d, name=%s",
+                device.getVendorId(), device.getProductId(), device.getInterfaceCount(), device.getDeviceName());
+    }
+
+    private void notifyStatus(final String statusText) {
+        recordDebugLine(statusText);
+        mainThreadHandler.post(new Runnable() {
+            @Override public void run() {
+                if (listener != null) listener.onUvcStatusChanged(statusText);
+            }
+        });
+    }
+
+    private void recordDebugLine(String message) {
+        if (message == null || message.trim().isEmpty()) return;
+        debugLogBuilder.append(String.format(Locale.US, "[%tF %<tT] %s\n", new Date(), message.trim()));
+        if (debugLogBuilder.length() > MAX_DEBUG_LOG_CHARS) {
+            debugLogBuilder.delete(0, debugLogBuilder.length() - MAX_DEBUG_LOG_CHARS);
+        }
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static String describeThrowable(Throwable throwable) {
+        String message = throwable.getMessage();
+        return throwable.getClass().getSimpleName() + ": "
+                + (message == null || message.trim().isEmpty() ? "no detail message" : message);
+    }
+}
