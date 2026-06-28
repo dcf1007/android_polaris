@@ -2,7 +2,6 @@ package com.dcf1007.androidpolaris;
 
 import android.app.Activity;
 import android.app.Application;
-import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -19,28 +18,24 @@ import android.widget.TextView;
 import com.dcf1007.androidpolaris.camera.MainInterfaceOrganizer;
 
 import java.lang.reflect.Method;
-import java.util.HashSet;
 import java.util.Locale;
-import java.util.Set;
 
 /**
  * Startup coordinator for the single-activity app.
  *
- * <p>MainActivity owns the visible UI and UVC controller. This class handles app-level USB
- * attach/open events and decides whether Android has exposed enough descriptor information to call
- * the UVC backend safely. It never hands a zero-interface raw USB object to libuvc.</p>
+ * <p>MainActivity owns the UI and UVC controller. This class only normalizes the menu and triggers
+ * the normal Open/query button when Android reports a raw USB device. The UVC backend then requests
+ * permission and lets libuvc validate whether that raw device is a camera.</p>
  */
 public final class PolarisApplication extends Application {
     private static final int USB_VIDEO_CLASS = 14;
     private static final int AUTO_QUERY_MARKER_KEY = 0x706f6c61; // "pola"
-    private static final String ACTION_RAW_USB_PERMISSION = "com.dcf1007.androidpolaris.RAW_USB_PERMISSION";
 
-    private final Set<Integer> permissionRequestsInFlight = new HashSet<>();
     private Activity currentMainActivity;
 
     @Override public void onCreate() {
         super.onCreate();
-        registerUsbReceiver();
+        registerUsbAttachReceiver();
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
             @Override public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
                 if (activity instanceof MainActivity) currentMainActivity = activity;
@@ -60,26 +55,13 @@ public final class PolarisApplication extends Application {
         });
     }
 
-    private void registerUsbReceiver() {
-        IntentFilter filter = new IntentFilter();
-        filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
-        filter.addAction(ACTION_RAW_USB_PERMISSION);
+    private void registerUsbAttachReceiver() {
+        IntentFilter filter = new IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
-                String action = intent.getAction();
+                if (!UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) return;
                 Activity activity = currentMainActivity;
-                if (activity == null) return;
-                if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action)) {
-                    organizeAndMaybeQuery(activity, true);
-                } else if (ACTION_RAW_USB_PERMISSION.equals(action)) {
-                    UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                    if (device != null) permissionRequestsInFlight.remove(device.getDeviceId());
-                    boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
-                    reportToMainActivity(activity, granted
-                            ? "Android USB permission granted. Re-scanning descriptors."
-                            : "Android USB permission denied. UVC descriptors cannot be inspected.");
-                    organizeAndMaybeQuery(activity, true);
-                }
+                if (activity != null) organizeAndMaybeQuery(activity, true);
             }
         };
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -89,7 +71,7 @@ public final class PolarisApplication extends Application {
         }
     }
 
-    private void organizeAndMaybeQuery(final Activity activity, final boolean forceQuery) {
+    private static void organizeAndMaybeQuery(final Activity activity, final boolean forceQuery) {
         if (!(activity instanceof MainActivity)) return;
         final View contentRoot = activity.findViewById(android.R.id.content);
         if (contentRoot == null) return;
@@ -99,48 +81,16 @@ public final class PolarisApplication extends Application {
                 UsbManager usbManager = (UsbManager) activity.getSystemService(Context.USB_SERVICE);
                 if (usbManager == null || usbManager.getDeviceList().isEmpty()) return;
 
-                UsbDevice uvcDevice = firstDeviceWithVideoInterface(usbManager);
                 boolean alreadyQueried = Boolean.TRUE.equals(contentRoot.getTag(AUTO_QUERY_MARKER_KEY));
-                if (uvcDevice != null) {
-                    if (forceQuery || !alreadyQueried) {
-                        contentRoot.setTag(AUTO_QUERY_MARKER_KEY, Boolean.TRUE);
-                        reportToMainActivity(activity, "Android USB Host exposes a USB Video interface. Querying UVC capabilities.\n"
-                                + describeRawUsbDevices(usbManager));
-                        View openQueryButton = findTextViewWithText(contentRoot, "Open/query USB UVC camera");
-                        if (openQueryButton != null) openQueryButton.performClick();
-                    }
-                    return;
+                if (forceQuery || !alreadyQueried) {
+                    contentRoot.setTag(AUTO_QUERY_MARKER_KEY, Boolean.TRUE);
+                    reportToMainActivity(activity, "Raw USB device detected. Passing candidate to libuvc query path.\n"
+                            + describeRawUsbDevices(usbManager));
+                    View openQueryButton = findTextViewWithText(contentRoot, "Open/query USB UVC camera");
+                    if (openQueryButton != null) openQueryButton.performClick();
                 }
-
-                reportToMainActivity(activity, "USB device attached, but Android has not exposed a USB Video interface.\n"
-                        + describeRawUsbDevices(usbManager));
-                requestPermissionForFirstRawDevice(activity, usbManager);
             }
         });
-    }
-
-    private void requestPermissionForFirstRawDevice(Activity activity, UsbManager usbManager) {
-        for (UsbDevice device : usbManager.getDeviceList().values()) {
-            if (usbManager.hasPermission(device) || permissionRequestsInFlight.contains(device.getDeviceId())) continue;
-            permissionRequestsInFlight.add(device.getDeviceId());
-            Intent intent = new Intent(ACTION_RAW_USB_PERMISSION).setPackage(activity.getPackageName());
-            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
-            PendingIntent pendingIntent = PendingIntent.getBroadcast(activity, device.getDeviceId(), intent, flags);
-            usbManager.requestPermission(device, pendingIntent);
-            reportToMainActivity(activity, "Requested Android USB permission to inspect descriptors for " + describeDeviceBrief(device) + ".");
-            return;
-        }
-    }
-
-    private static UsbDevice firstDeviceWithVideoInterface(UsbManager usbManager) {
-        for (UsbDevice device : usbManager.getDeviceList().values()) {
-            for (int index = 0; index < device.getInterfaceCount(); index++) {
-                UsbInterface usbInterface = device.getInterface(index);
-                if (usbInterface != null && usbInterface.getInterfaceClass() == USB_VIDEO_CLASS) return device;
-            }
-        }
-        return null;
     }
 
     private static String describeRawUsbDevices(UsbManager usbManager) {
@@ -160,7 +110,8 @@ public final class PolarisApplication extends Application {
                         .append("  interface ").append(index)
                         .append(": class=").append(usbInterface.getInterfaceClass())
                         .append('/').append(usbInterface.getInterfaceSubclass())
-                        .append('/').append(usbInterface.getInterfaceProtocol());
+                        .append('/').append(usbInterface.getInterfaceProtocol())
+                        .append(usbInterface.getInterfaceClass() == USB_VIDEO_CLASS ? " USB_VIDEO" : "");
             }
         }
         return builder.toString();
