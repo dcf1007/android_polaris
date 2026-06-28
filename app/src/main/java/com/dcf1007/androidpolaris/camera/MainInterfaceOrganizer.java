@@ -16,14 +16,15 @@ import java.util.Locale;
  * section headers collapsible, moves video-fit controls into the video-alignment section, and
  * updates camera wording to match the capability-query-first UVC lifecycle.</p>
  */
-final class MainInterfaceOrganizer {
+public final class MainInterfaceOrganizer {
     private static final String[] COLLAPSIBLE_SECTION_NAMES = {
             "ALIGNMENT", "VISIBILITY", "POLARIS ALIGNMENT", "STATUS", "READOUTS", "DEBUG LOG"
     };
 
     private MainInterfaceOrganizer() { }
 
-    static void organize(View root) {
+    /** Applies static layout organization immediately after MainActivity has built its panels. */
+    public static void organize(View root) {
         LinearLayout controlsColumn = findControlsColumn(root);
         if (controlsColumn == null) return;
         relabelOpenCameraButton(controlsColumn);
@@ -31,7 +32,7 @@ final class MainInterfaceOrganizer {
         installCollapsibleSectionHeaders(controlsColumn);
     }
 
-    static LinearLayout findFirstPanelInScrollableControls(View root) {
+    public static LinearLayout findFirstPanelInScrollableControls(View root) {
         LinearLayout controlsColumn = findControlsColumn(root);
         if (controlsColumn == null) return null;
         for (int i = 0; i < controlsColumn.getChildCount(); i++) {
