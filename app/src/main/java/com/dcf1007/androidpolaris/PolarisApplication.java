@@ -2,6 +2,7 @@ package com.dcf1007.androidpolaris;
 
 import android.app.Activity;
 import android.app.Application;
+import android.content.Context;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
@@ -13,11 +14,12 @@ import android.widget.TextView;
 import com.dcf1007.androidpolaris.camera.MainInterfaceOrganizer;
 
 /**
- * Application-level launch hook for static UI organization and camera auto-query.
+ * Startup coordinator for the single-activity app.
  *
- * <p>The real camera lifecycle still lives in MainActivity and UvcPreviewController. This hook only
- * runs after MainActivity has built its view: it organizes the visible controls and, when Android
- * USB Host already reports a UVC camera, presses the same Open/query button the user would press.</p>
+ * <p>MainActivity owns the actual UI and UVC lifecycle. This application class only performs the
+ * app-wide startup actions that must happen after MainActivity has attached its content view:
+ * normalize the static menu layout and auto-trigger the normal Open/query button when Android USB
+ * Host already reports a UVC camera.</p>
  */
 public final class PolarisApplication extends Application {
     private static final int USB_VIDEO_CLASS = 14;
@@ -55,11 +57,11 @@ public final class PolarisApplication extends Application {
     }
 
     private static boolean hasAttachedUvcDevice(Activity activity) {
-        UsbManager usbManager = (UsbManager) activity.getSystemService(USB_SERVICE);
+        UsbManager usbManager = (UsbManager) activity.getSystemService(Context.USB_SERVICE);
         if (usbManager == null) return false;
         for (UsbDevice device : usbManager.getDeviceList().values()) {
-            for (int i = 0; i < device.getInterfaceCount(); i++) {
-                UsbInterface usbInterface = device.getInterface(i);
+            for (int index = 0; index < device.getInterfaceCount(); index++) {
+                UsbInterface usbInterface = device.getInterface(index);
                 if (usbInterface != null && usbInterface.getInterfaceClass() == USB_VIDEO_CLASS) return true;
             }
         }
@@ -70,8 +72,8 @@ public final class PolarisApplication extends Application {
         if (view instanceof TextView && text.contentEquals(((TextView) view).getText())) return view;
         if (!(view instanceof ViewGroup)) return null;
         ViewGroup group = (ViewGroup) view;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            View found = findTextViewWithText(group.getChildAt(i), text);
+        for (int index = 0; index < group.getChildCount(); index++) {
+            View found = findTextViewWithText(group.getChildAt(index), text);
             if (found != null) return found;
         }
         return null;
