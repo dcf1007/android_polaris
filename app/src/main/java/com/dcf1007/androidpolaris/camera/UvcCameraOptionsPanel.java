@@ -24,13 +24,11 @@ import java.util.List;
 /**
  * UI binding for queried UVC capabilities.
  *
- * <p>The controller queries the camera and publishes a UvcCapabilities snapshot.
- * This panel is inserted into the existing camera panel under the USB buttons,
- * so it behaves like the rest of the interface instead of floating above the reticle.</p>
+ * <p>The panel is inserted into the existing camera panel under the USB buttons. It does not
+ * open preview automatically. The user first selects a queried stream mode, then explicitly starts
+ * or reapplies that stream. Reapplying closes and reopens the UVC backend through the controller.</p>
  */
 final class UvcCameraOptionsPanel {
-    private static final int HIGH_STREAM_PIXELS = 1280 * 720;
-
     private final Context context;
     private final UvcPreviewController controller;
 
@@ -38,6 +36,7 @@ final class UvcCameraOptionsPanel {
     private TextView titleView;
     private TextView capabilitySummaryView;
     private Spinner streamModeSpinner;
+    private Button startStreamButton;
     private SeekBar brightnessSeekBar;
     private SeekBar contrastSeekBar;
     private SeekBar gainSeekBar;
@@ -52,7 +51,7 @@ final class UvcCameraOptionsPanel {
     private boolean lastCameraOpen;
     private boolean lastExposureSupported;
     private List<UvcPreviewController.StreamMode> streamModes = new ArrayList<>();
-    private UvcPreviewController.StreamMode activeStreamMode;
+    private UvcPreviewController.StreamMode selectedStreamMode;
 
     UvcCameraOptionsPanel(Context context, UvcPreviewController controller) {
         this.context = context;
@@ -73,7 +72,9 @@ final class UvcCameraOptionsPanel {
         binding = true;
         lastCameraOpen = capabilities.cameraOpen;
         lastExposureSupported = capabilities.exposureSupported;
-        activeStreamMode = capabilities.activeStreamMode;
+        selectedStreamMode = capabilities.selectedStreamMode != null
+                ? capabilities.selectedStreamMode
+                : capabilities.activeStreamMode;
 
         List<UvcPreviewController.StreamMode> queriedModes = new ArrayList<>(capabilities.streamModes);
         if (!sameModeList(streamModes, queriedModes)) {
@@ -84,12 +85,17 @@ final class UvcCameraOptionsPanel {
             streamModeSpinner.setAdapter(adapter);
         }
         streamModeSpinner.setEnabled(capabilities.cameraOpen && !streamModes.isEmpty());
-        if (activeStreamMode != null) {
-            int activeIndex = indexOfEquivalentMode(activeStreamMode);
-            if (activeIndex >= 0 && streamModeSpinner.getSelectedItemPosition() != activeIndex) {
-                streamModeSpinner.setSelection(activeIndex, false);
+        if (selectedStreamMode != null) {
+            int selectedIndex = indexOfEquivalentMode(selectedStreamMode);
+            if (selectedIndex >= 0 && streamModeSpinner.getSelectedItemPosition() != selectedIndex) {
+                streamModeSpinner.setSelection(selectedIndex, false);
             }
         }
+
+        startStreamButton.setEnabled(capabilities.cameraOpen && !streamModes.isEmpty());
+        startStreamButton.setText(capabilities.previewRunning
+                ? "Apply selected stream by reopening preview"
+                : "Start selected stream");
 
         brightnessSeekBar.setEnabled(capabilities.cameraOpen && capabilities.brightnessSupported);
         contrastSeekBar.setEnabled(capabilities.cameraOpen && capabilities.contrastSupported);
@@ -125,13 +131,24 @@ final class UvcCameraOptionsPanel {
 
         LinearLayout body = new LinearLayout(context);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.setTag("uvc-options-body");
         panel.addView(body, new LinearLayout.LayoutParams(-1, -2));
 
         body.addView(text("Stream mode", 11, false), new LinearLayout.LayoutParams(-1, -2));
         streamModeSpinner = new Spinner(context);
         streamModeSpinner.setEnabled(false);
         body.addView(streamModeSpinner, new LinearLayout.LayoutParams(-1, -2));
+
+        startStreamButton = new Button(context);
+        startStreamButton.setAllCaps(false);
+        startStreamButton.setText("Start selected stream");
+        startStreamButton.setTextSize(12);
+        startStreamButton.setEnabled(false);
+        startStreamButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                controller.startSelectedStream();
+            }
+        });
+        body.addView(startStreamButton, new LinearLayout.LayoutParams(-1, -2));
 
         brightnessSeekBar = addSlider(body, "Brightness", brightnessValueView = rightValue());
         contrastSeekBar = addSlider(body, "Contrast", contrastValueView = rightValue());
@@ -145,7 +162,7 @@ final class UvcCameraOptionsPanel {
         autoExposureCheckBox.setEnabled(false);
         body.addView(autoExposureCheckBox, new LinearLayout.LayoutParams(-1, -2));
 
-        capabilitySummaryView = text("Open the UVC camera to query capabilities.", 11, false);
+        capabilitySummaryView = text("Open/query the UVC camera to list stream modes and controls.", 11, false);
         capabilitySummaryView.setTextColor(Color.rgb(180, 190, 203));
         body.addView(capabilitySummaryView, new LinearLayout.LayoutParams(-1, -2));
 
@@ -160,8 +177,8 @@ final class UvcCameraOptionsPanel {
         });
         body.addView(saveLogButton, new LinearLayout.LayoutParams(-1, -2));
 
-        // Camera panel children are: title, open/status row, stop button, then status text.
-        // Insert here so hardware controls live under the buttons and above the status block.
+        // Camera panel children are: title, open/status row, stop button, then the rest.
+        // Insert here so hardware controls live under the buttons and above status text.
         int insertIndex = Math.min(3, mainCameraPanel.getChildCount());
         mainCameraPanel.addView(panel, insertIndex, new LinearLayout.LayoutParams(-1, -2));
         wireActions();
@@ -197,7 +214,8 @@ final class UvcCameraOptionsPanel {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (binding || position < 0 || position >= streamModes.size()) return;
                 UvcPreviewController.StreamMode selectedMode = streamModes.get(position);
-                if (sameMode(selectedMode, activeStreamMode)) return;
+                if (sameMode(selectedMode, selectedStreamMode)) return;
+                selectedStreamMode = selectedMode;
                 controller.selectStreamMode(selectedMode);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
@@ -206,8 +224,6 @@ final class UvcCameraOptionsPanel {
         SeekBar.OnSeekBarChangeListener sliderListener = new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (!fromUser || binding) return;
-                // Keep the UI responsive while dragging. The USB control write is sent once
-                // on release so preview streaming is not flooded with control transfers.
                 updateValueLabels();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
@@ -269,17 +285,19 @@ final class UvcCameraOptionsPanel {
     private String buildCapabilitySummary(UvcPreviewController.UvcCapabilities capabilities) {
         StringBuilder builder = new StringBuilder();
         builder.append(capabilities.statusText == null ? "UVC status unavailable." : capabilities.statusText).append('\n');
+        builder.append("Preview: ").append(capabilities.previewRunning ? "running" : "stopped").append('\n');
         builder.append("Stream modes: ").append(capabilities.streamModes.size()).append('\n');
+        if (capabilities.selectedStreamMode != null) {
+            builder.append("Selected: ").append(capabilities.selectedStreamMode.fullLabel()).append('\n');
+        }
+        if (capabilities.activeStreamMode != null) {
+            builder.append("Active: ").append(capabilities.activeStreamMode.fullLabel()).append('\n');
+        }
         builder.append("Brightness: ").append(capabilities.brightnessSupported ? "available" : "not reported").append('\n');
         builder.append("Contrast: ").append(capabilities.contrastSupported ? "available" : "not reported").append('\n');
         builder.append("Gain: ").append(capabilities.gainSupported ? "available" : "not reported").append('\n');
         builder.append("Exposure: ").append(capabilities.exposureSupported ? capabilities.exposureRangeText : "not reported").append('\n');
         builder.append("Auto exposure: ").append(capabilities.autoExposureSupported ? "available" : "not reported").append('\n');
-        if (capabilities.activeStreamMode != null
-                && capabilities.activeStreamMode.width * capabilities.activeStreamMode.height > HIGH_STREAM_PIXELS) {
-            builder.append("Current stream is high resolution and may lag on USB/phone bandwidth.\n");
-        }
-        builder.append("If a selected mode hangs, export the UVC log after recovery so the failing format can be diagnosed.\n");
         builder.append("Colour/B&W/day-night: not reported as a standard UVC control.");
         return builder.toString();
     }
