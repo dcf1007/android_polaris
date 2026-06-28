@@ -27,10 +27,12 @@ final class UvcCameraOptionsPanel {
     private final Context context;
     private final UvcPreviewController controller;
     private final List<UvcPreviewController.StreamMode> streamModes = new ArrayList<>();
+    private final List<String> streamTypeOptions = new ArrayList<>();
     private final List<String> resolutionOptions = new ArrayList<>();
     private final List<Integer> fpsOptions = new ArrayList<>();
 
     private LinearLayout panel;
+    private Spinner streamTypeSpinner;
     private Spinner resolutionSpinner;
     private Spinner fpsSpinner;
     private Button startStreamButton;
@@ -44,6 +46,7 @@ final class UvcCameraOptionsPanel {
     private boolean collapsed;
     private boolean lastCameraOpen;
     private boolean lastExposureSupported;
+    private boolean userSelectedStreamMode;
     private UvcPreviewController.StreamMode selectedStreamMode;
 
     private static final class FineSlider {
@@ -87,21 +90,35 @@ final class UvcCameraOptionsPanel {
         binding = true;
         lastCameraOpen = capabilities.cameraOpen;
         lastExposureSupported = capabilities.exposureSupported;
-        selectedStreamMode = capabilities.selectedStreamMode != null ? capabilities.selectedStreamMode : capabilities.activeStreamMode;
 
-        if (!sameModeList(streamModes, capabilities.streamModes)) {
+        boolean modesChanged = !sameModeList(streamModes, capabilities.streamModes);
+        if (modesChanged) {
             streamModes.clear();
             streamModes.addAll(capabilities.streamModes);
-            rebuildResolutionSpinner();
         }
+        UvcPreviewController.StreamMode capabilityMode = capabilities.selectedStreamMode != null
+                ? capabilities.selectedStreamMode
+                : capabilities.activeStreamMode;
+        if (capabilities.previewRunning) {
+            selectedStreamMode = capabilities.activeStreamMode;
+        } else if (!userSelectedStreamMode && !streamModes.isEmpty()) {
+            selectedStreamMode = chooseDefaultStreamMode();
+        } else if (selectedStreamMode == null) {
+            selectedStreamMode = capabilityMode;
+        }
+        if (modesChanged) rebuildStreamTypeSpinner();
         selectCurrentStreamInDropdowns();
+        if (!userSelectedStreamMode && !capabilities.previewRunning && selectedStreamMode != null && !sameMode(selectedStreamMode, capabilityMode)) {
+            controller.selectStreamMode(selectedStreamMode);
+        }
 
         boolean streamSelectionEnabled = capabilities.cameraOpen && !capabilities.previewRunning && !streamModes.isEmpty();
-        resolutionSpinner.setEnabled(streamSelectionEnabled);
+        streamTypeSpinner.setEnabled(streamSelectionEnabled);
+        resolutionSpinner.setEnabled(streamSelectionEnabled && !resolutionOptions.isEmpty());
         fpsSpinner.setEnabled(streamSelectionEnabled && !fpsOptions.isEmpty());
-        startStreamButton.setEnabled(streamSelectionEnabled);
+        startStreamButton.setEnabled(streamSelectionEnabled && selectedModeFromDropdowns() != null);
         startStreamButton.setText(capabilities.previewRunning
-                ? "Preview running — stop camera to change resolution/FPS"
+                ? "Preview running — stop camera to change stream"
                 : "Start selected stream");
 
         brightnessSlider.setEnabled(capabilities.cameraOpen && capabilities.brightnessSupported);
@@ -142,6 +159,11 @@ final class UvcCameraOptionsPanel {
         body.setOrientation(LinearLayout.VERTICAL);
         panel.addView(body, new LinearLayout.LayoutParams(-1, -2));
 
+        body.addView(text("Stream type", 11, false));
+        streamTypeSpinner = new Spinner(context);
+        streamTypeSpinner.setEnabled(false);
+        body.addView(streamTypeSpinner, new LinearLayout.LayoutParams(-1, -2));
+
         body.addView(text("Resolution", 11, false));
         resolutionSpinner = new Spinner(context);
         resolutionSpinner.setEnabled(false);
@@ -180,18 +202,26 @@ final class UvcCameraOptionsPanel {
     }
 
     private void wireActions() {
+        streamTypeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (binding || position < 0 || position >= streamTypeOptions.size()) return;
+                rebuildResolutionSpinnerForType(streamTypeOptions.get(position));
+                selectModeFromDropdowns(true);
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) { }
+        });
         resolutionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (binding || position < 0 || position >= resolutionOptions.size()) return;
-                rebuildFpsSpinnerForResolution(resolutionOptions.get(position), selectedStreamMode == null ? -1 : selectedStreamMode.fps);
-                selectModeFromDropdowns();
+                rebuildFpsSpinnerForSelection(currentTypeLabel(), resolutionOptions.get(position), selectedStreamMode == null ? -1 : selectedStreamMode.fps);
+                selectModeFromDropdowns(true);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });
         fpsSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (binding || position < 0 || position >= fpsOptions.size()) return;
-                selectModeFromDropdowns();
+                selectModeFromDropdowns(true);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });
@@ -214,9 +244,27 @@ final class UvcCameraOptionsPanel {
         });
     }
 
-    private void rebuildResolutionSpinner() {
+    private void rebuildStreamTypeSpinner() {
+        streamTypeOptions.clear();
+        UvcPreviewController.StreamMode defaultMode = selectedStreamMode == null ? chooseDefaultStreamMode() : selectedStreamMode;
+        for (UvcPreviewController.StreamMode mode : streamModes) {
+            String label = mode.formatLabel();
+            if (!streamTypeOptions.contains(label)) streamTypeOptions.add(label);
+        }
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(context, android.R.layout.simple_spinner_item, streamTypeOptions);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        streamTypeSpinner.setAdapter(adapter);
+        String selectedType = defaultMode == null ? null : defaultMode.formatLabel();
+        if (selectedType == null && !streamTypeOptions.isEmpty()) selectedType = streamTypeOptions.get(0);
+        int typeIndex = streamTypeOptions.indexOf(selectedType);
+        if (typeIndex >= 0) streamTypeSpinner.setSelection(typeIndex, false);
+        rebuildResolutionSpinnerForType(selectedType);
+    }
+
+    private void rebuildResolutionSpinnerForType(String typeLabel) {
         resolutionOptions.clear();
         for (UvcPreviewController.StreamMode mode : streamModes) {
+            if (typeLabel == null || !typeLabel.equals(mode.formatLabel())) continue;
             String label = mode.resolutionLabel();
             if (!resolutionOptions.contains(label)) resolutionOptions.add(label);
         }
@@ -224,53 +272,94 @@ final class UvcCameraOptionsPanel {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         resolutionSpinner.setAdapter(adapter);
         String selectedResolution = selectedStreamMode == null ? null : selectedStreamMode.resolutionLabel();
-        if (selectedResolution == null && !resolutionOptions.isEmpty()) selectedResolution = resolutionOptions.get(0);
-        rebuildFpsSpinnerForResolution(selectedResolution, selectedStreamMode == null ? -1 : selectedStreamMode.fps);
+        if ((selectedResolution == null || !resolutionOptions.contains(selectedResolution)) && !resolutionOptions.isEmpty()) {
+            selectedResolution = resolutionOptions.get(0);
+        }
+        int resolutionIndex = resolutionOptions.indexOf(selectedResolution);
+        if (resolutionIndex >= 0) resolutionSpinner.setSelection(resolutionIndex, false);
+        rebuildFpsSpinnerForSelection(typeLabel, selectedResolution, selectedStreamMode == null ? -1 : selectedStreamMode.fps);
     }
 
-    private void rebuildFpsSpinnerForResolution(String resolutionLabel, int preferredFps) {
+    private void rebuildFpsSpinnerForSelection(String typeLabel, String resolutionLabel, int preferredFps) {
         fpsOptions.clear();
         for (UvcPreviewController.StreamMode mode : streamModes) {
+            if (typeLabel != null && !typeLabel.equals(mode.formatLabel())) continue;
             if (resolutionLabel != null && resolutionLabel.equals(mode.resolutionLabel()) && !fpsOptions.contains(mode.fps)) fpsOptions.add(mode.fps);
         }
         ArrayAdapter<Integer> adapter = new ArrayAdapter<>(context, android.R.layout.simple_spinner_item, fpsOptions);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         fpsSpinner.setAdapter(adapter);
         int fpsIndex = fpsOptions.indexOf(preferredFps);
-        if (fpsIndex < 0 && !fpsOptions.isEmpty()) fpsIndex = 0;
+        if (fpsIndex < 0 && !fpsOptions.isEmpty()) fpsIndex = indexOfHighestFps();
         if (fpsIndex >= 0) fpsSpinner.setSelection(fpsIndex, false);
     }
 
     private void selectCurrentStreamInDropdowns() {
         if (selectedStreamMode == null) return;
+        int typeIndex = streamTypeOptions.indexOf(selectedStreamMode.formatLabel());
+        if (typeIndex >= 0 && streamTypeSpinner.getSelectedItemPosition() != typeIndex) streamTypeSpinner.setSelection(typeIndex, false);
+        rebuildResolutionSpinnerForType(selectedStreamMode.formatLabel());
         int resolutionIndex = resolutionOptions.indexOf(selectedStreamMode.resolutionLabel());
-        if (resolutionIndex >= 0 && resolutionSpinner.getSelectedItemPosition() != resolutionIndex) {
-            resolutionSpinner.setSelection(resolutionIndex, false);
-        }
-        rebuildFpsSpinnerForResolution(selectedStreamMode.resolutionLabel(), selectedStreamMode.fps);
+        if (resolutionIndex >= 0 && resolutionSpinner.getSelectedItemPosition() != resolutionIndex) resolutionSpinner.setSelection(resolutionIndex, false);
+        rebuildFpsSpinnerForSelection(selectedStreamMode.formatLabel(), selectedStreamMode.resolutionLabel(), selectedStreamMode.fps);
     }
 
-    private void selectModeFromDropdowns() {
+    private void selectModeFromDropdowns(boolean fromUser) {
         UvcPreviewController.StreamMode selected = selectedModeFromDropdowns();
         if (selected != null && !sameMode(selected, selectedStreamMode)) {
             selectedStreamMode = selected;
+            if (fromUser) userSelectedStreamMode = true;
             controller.selectStreamMode(selected);
         }
     }
 
     private UvcPreviewController.StreamMode selectedModeFromDropdowns() {
+        String type = currentTypeLabel();
         int resolutionIndex = resolutionSpinner.getSelectedItemPosition();
         int fpsIndex = fpsSpinner.getSelectedItemPosition();
-        if (resolutionIndex < 0 || resolutionIndex >= resolutionOptions.size() || fpsIndex < 0 || fpsIndex >= fpsOptions.size()) return null;
+        if (type == null || resolutionIndex < 0 || resolutionIndex >= resolutionOptions.size() || fpsIndex < 0 || fpsIndex >= fpsOptions.size()) return null;
         String resolution = resolutionOptions.get(resolutionIndex);
         int fps = fpsOptions.get(fpsIndex);
-        UvcPreviewController.StreamMode fallback = null;
         for (UvcPreviewController.StreamMode mode : streamModes) {
-            if (!resolution.equals(mode.resolutionLabel()) || mode.fps != fps) continue;
-            if (mode.formatLabel().contains("YUYV")) return mode;
-            if (fallback == null) fallback = mode;
+            if (type.equals(mode.formatLabel()) && resolution.equals(mode.resolutionLabel()) && mode.fps == fps) return mode;
         }
-        return fallback;
+        return null;
+    }
+
+    private String currentTypeLabel() {
+        int typeIndex = streamTypeSpinner.getSelectedItemPosition();
+        return typeIndex >= 0 && typeIndex < streamTypeOptions.size() ? streamTypeOptions.get(typeIndex) : null;
+    }
+
+    private UvcPreviewController.StreamMode chooseDefaultStreamMode() {
+        UvcPreviewController.StreamMode bestUncompressed = bestStreamMode(true);
+        return bestUncompressed != null ? bestUncompressed : bestStreamMode(false);
+    }
+
+    private UvcPreviewController.StreamMode bestStreamMode(boolean uncompressedOnly) {
+        UvcPreviewController.StreamMode best = null;
+        for (UvcPreviewController.StreamMode mode : streamModes) {
+            boolean uncompressed = mode.formatLabel().contains("YUYV");
+            if (uncompressedOnly && !uncompressed) continue;
+            if (best == null || streamRank(mode) > streamRank(best)) best = mode;
+        }
+        return best;
+    }
+
+    private long streamRank(UvcPreviewController.StreamMode mode) {
+        return (long) mode.width * (long) mode.height * 10000L + mode.fps;
+    }
+
+    private int indexOfHighestFps() {
+        int bestIndex = -1;
+        int bestFps = -1;
+        for (int i = 0; i < fpsOptions.size(); i++) {
+            if (fpsOptions.get(i) > bestFps) {
+                bestFps = fpsOptions.get(i);
+                bestIndex = i;
+            }
+        }
+        return bestIndex;
     }
 
     private FineSlider addFineSlider(LinearLayout parent, String label) {
@@ -321,7 +410,7 @@ final class UvcCameraOptionsPanel {
     private String summary(UvcPreviewController.UvcCapabilities capabilities) {
         StringBuilder b = new StringBuilder();
         b.append(capabilities.statusText == null ? "UVC status unavailable." : capabilities.statusText).append('\n');
-        b.append("Preview: ").append(capabilities.previewRunning ? "running; resolution/FPS locked" : "stopped; resolution/FPS selectable").append('\n');
+        b.append("Preview: ").append(capabilities.previewRunning ? "running; stream controls locked" : "stopped; stream controls selectable").append('\n');
         b.append("Stream modes: ").append(capabilities.streamModes.size()).append('\n');
         if (capabilities.selectedStreamMode != null) b.append("Selected: ").append(capabilities.selectedStreamMode.fullLabel()).append('\n');
         if (capabilities.activeStreamMode != null) b.append("Active: ").append(capabilities.activeStreamMode.fullLabel()).append('\n');
@@ -337,11 +426,6 @@ final class UvcCameraOptionsPanel {
         for (int i = cameraPanel.getChildCount() - 1; i >= 0; i--) {
             if (MainInterfaceOrganizer.HARDWARE_CONTROLS_TAG.equals(cameraPanel.getChildAt(i).getTag())) cameraPanel.removeViewAt(i);
         }
-    }
-
-    private int indexOfEquivalentMode(UvcPreviewController.StreamMode target) {
-        for (int i = 0; i < streamModes.size(); i++) if (sameMode(streamModes.get(i), target)) return i;
-        return -1;
     }
 
     private boolean sameModeList(List<UvcPreviewController.StreamMode> first, List<UvcPreviewController.StreamMode> second) {
