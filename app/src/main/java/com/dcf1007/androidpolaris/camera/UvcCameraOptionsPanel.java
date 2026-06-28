@@ -20,22 +20,24 @@ import android.widget.TextView;
 import java.util.ArrayList;
 import java.util.List;
 
+/** Binds queried UVC capabilities to the visible hardware-controls section. */
 final class UvcCameraOptionsPanel {
+    private static final int FINE_STEP_PERCENT = 1;
+
     private final Context context;
     private final UvcPreviewController controller;
     private final List<UvcPreviewController.StreamMode> streamModes = new ArrayList<>();
+    private final List<String> resolutionOptions = new ArrayList<>();
+    private final List<Integer> fpsOptions = new ArrayList<>();
 
     private LinearLayout panel;
-    private Spinner streamModeSpinner;
+    private Spinner resolutionSpinner;
+    private Spinner fpsSpinner;
     private Button startStreamButton;
-    private SeekBar brightnessSeekBar;
-    private SeekBar contrastSeekBar;
-    private SeekBar gainSeekBar;
-    private SeekBar exposureSeekBar;
-    private TextView brightnessValueView;
-    private TextView contrastValueView;
-    private TextView gainValueView;
-    private TextView exposureValueView;
+    private FineSlider brightnessSlider;
+    private FineSlider contrastSlider;
+    private FineSlider gainSlider;
+    private FineSlider exposureSlider;
     private CheckBox autoExposureCheckBox;
     private TextView summaryView;
     private boolean binding;
@@ -43,6 +45,29 @@ final class UvcCameraOptionsPanel {
     private boolean lastCameraOpen;
     private boolean lastExposureSupported;
     private UvcPreviewController.StreamMode selectedStreamMode;
+
+    private static final class FineSlider {
+        final SeekBar seekBar;
+        final TextView valueView;
+        final Button minusButton;
+        final Button plusButton;
+
+        FineSlider(SeekBar seekBar, TextView valueView, Button minusButton, Button plusButton) {
+            this.seekBar = seekBar;
+            this.valueView = valueView;
+            this.minusButton = minusButton;
+            this.plusButton = plusButton;
+        }
+
+        int progress() { return seekBar.getProgress(); }
+        void setProgress(int progress) { seekBar.setProgress(clamp(progress, 0, 100)); }
+        void setEnabled(boolean enabled) {
+            seekBar.setEnabled(enabled);
+            minusButton.setEnabled(enabled);
+            plusButton.setEnabled(enabled);
+        }
+        void updateLabel() { valueView.setText(seekBar.getProgress() + "%"); }
+    }
 
     UvcCameraOptionsPanel(Context context, UvcPreviewController controller) {
         this.context = context;
@@ -67,23 +92,25 @@ final class UvcCameraOptionsPanel {
         if (!sameModeList(streamModes, capabilities.streamModes)) {
             streamModes.clear();
             streamModes.addAll(capabilities.streamModes);
-            ArrayAdapter<UvcPreviewController.StreamMode> adapter = new ArrayAdapter<>(context, android.R.layout.simple_spinner_item, streamModes);
-            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-            streamModeSpinner.setAdapter(adapter);
+            rebuildResolutionSpinner();
         }
-        streamModeSpinner.setEnabled(capabilities.cameraOpen && !streamModes.isEmpty());
-        int selectedIndex = indexOfEquivalentMode(selectedStreamMode);
-        if (selectedIndex >= 0 && streamModeSpinner.getSelectedItemPosition() != selectedIndex) streamModeSpinner.setSelection(selectedIndex, false);
+        selectCurrentStreamInDropdowns();
 
-        startStreamButton.setEnabled(capabilities.cameraOpen && !streamModes.isEmpty());
-        startStreamButton.setText(capabilities.previewRunning ? "Apply selected stream by reopening preview" : "Start selected stream");
-        brightnessSeekBar.setEnabled(capabilities.cameraOpen && capabilities.brightnessSupported);
-        contrastSeekBar.setEnabled(capabilities.cameraOpen && capabilities.contrastSupported);
-        gainSeekBar.setEnabled(capabilities.cameraOpen && capabilities.gainSupported);
+        boolean streamSelectionEnabled = capabilities.cameraOpen && !capabilities.previewRunning && !streamModes.isEmpty();
+        resolutionSpinner.setEnabled(streamSelectionEnabled);
+        fpsSpinner.setEnabled(streamSelectionEnabled && !fpsOptions.isEmpty());
+        startStreamButton.setEnabled(streamSelectionEnabled);
+        startStreamButton.setText(capabilities.previewRunning
+                ? "Preview running — stop camera to change resolution/FPS"
+                : "Start selected stream");
+
+        brightnessSlider.setEnabled(capabilities.cameraOpen && capabilities.brightnessSupported);
+        contrastSlider.setEnabled(capabilities.cameraOpen && capabilities.contrastSupported);
+        gainSlider.setEnabled(capabilities.cameraOpen && capabilities.gainSupported);
         autoExposureCheckBox.setEnabled(capabilities.cameraOpen && capabilities.autoExposureSupported);
         autoExposureCheckBox.setChecked(capabilities.autoExposureEnabled);
-        exposureSeekBar.setProgress(clamp(capabilities.exposurePercent, 0, 100));
-        exposureSeekBar.setEnabled(lastCameraOpen && lastExposureSupported && !capabilities.autoExposureEnabled);
+        exposureSlider.setProgress(clamp(capabilities.exposurePercent, 0, 100));
+        exposureSlider.setEnabled(lastCameraOpen && lastExposureSupported && !capabilities.autoExposureEnabled);
         updateValueLabels();
         summaryView.setText(summary(capabilities));
         binding = false;
@@ -115,19 +142,25 @@ final class UvcCameraOptionsPanel {
         body.setOrientation(LinearLayout.VERTICAL);
         panel.addView(body, new LinearLayout.LayoutParams(-1, -2));
 
-        body.addView(text("Stream mode", 11, false));
-        streamModeSpinner = new Spinner(context);
-        streamModeSpinner.setEnabled(false);
-        body.addView(streamModeSpinner, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(text("Resolution", 11, false));
+        resolutionSpinner = new Spinner(context);
+        resolutionSpinner.setEnabled(false);
+        body.addView(resolutionSpinner, new LinearLayout.LayoutParams(-1, -2));
+
+        body.addView(text("FPS", 11, false));
+        fpsSpinner = new Spinner(context);
+        fpsSpinner.setEnabled(false);
+        body.addView(fpsSpinner, new LinearLayout.LayoutParams(-1, -2));
+
         startStreamButton = button("Start selected stream", false, new View.OnClickListener() {
             @Override public void onClick(View view) { controller.startSelectedStream(); }
         });
         body.addView(startStreamButton, new LinearLayout.LayoutParams(-1, -2));
 
-        brightnessSeekBar = addSlider(body, "Brightness", brightnessValueView = rightValue());
-        contrastSeekBar = addSlider(body, "Contrast", contrastValueView = rightValue());
-        gainSeekBar = addSlider(body, "Gain", gainValueView = rightValue());
-        exposureSeekBar = addSlider(body, "Exposure", exposureValueView = rightValue());
+        brightnessSlider = addFineSlider(body, "Brightness");
+        contrastSlider = addFineSlider(body, "Contrast");
+        gainSlider = addFineSlider(body, "Gain");
+        exposureSlider = addFineSlider(body, "Exposure");
         autoExposureCheckBox = new CheckBox(context);
         autoExposureCheckBox.setText("Auto exposure");
         autoExposureCheckBox.setTextColor(Color.rgb(243, 245, 247));
@@ -147,65 +180,148 @@ final class UvcCameraOptionsPanel {
     }
 
     private void wireActions() {
-        streamModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+        resolutionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (binding || position < 0 || position >= streamModes.size()) return;
-                UvcPreviewController.StreamMode mode = streamModes.get(position);
-                if (!sameMode(mode, selectedStreamMode)) {
-                    selectedStreamMode = mode;
-                    controller.selectStreamMode(mode);
-                }
+                if (binding || position < 0 || position >= resolutionOptions.size()) return;
+                rebuildFpsSpinnerForResolution(resolutionOptions.get(position), selectedStreamMode == null ? -1 : selectedStreamMode.fps);
+                selectModeFromDropdowns();
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });
+        fpsSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (binding || position < 0 || position >= fpsOptions.size()) return;
+                selectModeFromDropdowns();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) { }
+        });
+
         SeekBar.OnSeekBarChangeListener sliderListener = new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) { if (fromUser && !binding) updateValueLabels(); }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
             @Override public void onStopTrackingTouch(SeekBar seekBar) { if (!binding) applyCameraControls(); }
         };
-        brightnessSeekBar.setOnSeekBarChangeListener(sliderListener);
-        contrastSeekBar.setOnSeekBarChangeListener(sliderListener);
-        gainSeekBar.setOnSeekBarChangeListener(sliderListener);
-        exposureSeekBar.setOnSeekBarChangeListener(sliderListener);
+        brightnessSlider.seekBar.setOnSeekBarChangeListener(sliderListener);
+        contrastSlider.seekBar.setOnSeekBarChangeListener(sliderListener);
+        gainSlider.seekBar.setOnSeekBarChangeListener(sliderListener);
+        exposureSlider.seekBar.setOnSeekBarChangeListener(sliderListener);
         autoExposureCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override public void onCheckedChanged(CompoundButton buttonView, boolean checked) {
                 if (binding) return;
-                exposureSeekBar.setEnabled(lastCameraOpen && lastExposureSupported && !checked);
+                exposureSlider.setEnabled(lastCameraOpen && lastExposureSupported && !checked);
                 applyCameraControls();
             }
         });
     }
 
-    private SeekBar addSlider(LinearLayout parent, String label, TextView valueView) {
+    private void rebuildResolutionSpinner() {
+        resolutionOptions.clear();
+        for (UvcPreviewController.StreamMode mode : streamModes) {
+            String label = mode.resolutionLabel();
+            if (!resolutionOptions.contains(label)) resolutionOptions.add(label);
+        }
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(context, android.R.layout.simple_spinner_item, resolutionOptions);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        resolutionSpinner.setAdapter(adapter);
+        String selectedResolution = selectedStreamMode == null ? null : selectedStreamMode.resolutionLabel();
+        if (selectedResolution == null && !resolutionOptions.isEmpty()) selectedResolution = resolutionOptions.get(0);
+        rebuildFpsSpinnerForResolution(selectedResolution, selectedStreamMode == null ? -1 : selectedStreamMode.fps);
+    }
+
+    private void rebuildFpsSpinnerForResolution(String resolutionLabel, int preferredFps) {
+        fpsOptions.clear();
+        for (UvcPreviewController.StreamMode mode : streamModes) {
+            if (resolutionLabel != null && resolutionLabel.equals(mode.resolutionLabel()) && !fpsOptions.contains(mode.fps)) fpsOptions.add(mode.fps);
+        }
+        ArrayAdapter<Integer> adapter = new ArrayAdapter<>(context, android.R.layout.simple_spinner_item, fpsOptions);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        fpsSpinner.setAdapter(adapter);
+        int fpsIndex = fpsOptions.indexOf(preferredFps);
+        if (fpsIndex < 0 && !fpsOptions.isEmpty()) fpsIndex = 0;
+        if (fpsIndex >= 0) fpsSpinner.setSelection(fpsIndex, false);
+    }
+
+    private void selectCurrentStreamInDropdowns() {
+        if (selectedStreamMode == null) return;
+        int resolutionIndex = resolutionOptions.indexOf(selectedStreamMode.resolutionLabel());
+        if (resolutionIndex >= 0 && resolutionSpinner.getSelectedItemPosition() != resolutionIndex) {
+            resolutionSpinner.setSelection(resolutionIndex, false);
+        }
+        rebuildFpsSpinnerForResolution(selectedStreamMode.resolutionLabel(), selectedStreamMode.fps);
+    }
+
+    private void selectModeFromDropdowns() {
+        UvcPreviewController.StreamMode selected = selectedModeFromDropdowns();
+        if (selected != null && !sameMode(selected, selectedStreamMode)) {
+            selectedStreamMode = selected;
+            controller.selectStreamMode(selected);
+        }
+    }
+
+    private UvcPreviewController.StreamMode selectedModeFromDropdowns() {
+        int resolutionIndex = resolutionSpinner.getSelectedItemPosition();
+        int fpsIndex = fpsSpinner.getSelectedItemPosition();
+        if (resolutionIndex < 0 || resolutionIndex >= resolutionOptions.size() || fpsIndex < 0 || fpsIndex >= fpsOptions.size()) return null;
+        String resolution = resolutionOptions.get(resolutionIndex);
+        int fps = fpsOptions.get(fpsIndex);
+        UvcPreviewController.StreamMode fallback = null;
+        for (UvcPreviewController.StreamMode mode : streamModes) {
+            if (!resolution.equals(mode.resolutionLabel()) || mode.fps != fps) continue;
+            if (mode.formatLabel().contains("YUYV")) return mode;
+            if (fallback == null) fallback = mode;
+        }
+        return fallback;
+    }
+
+    private FineSlider addFineSlider(LinearLayout parent, String label) {
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.addView(text(label, 11, false), new LinearLayout.LayoutParams(0, -2, 1.0f));
-        row.addView(valueView, new LinearLayout.LayoutParams(0, -2, 1.0f));
+        Button minus = button("−", false, null);
+        TextView value = rightValue();
+        Button plus = button("+", false, null);
+        row.addView(minus, new LinearLayout.LayoutParams(dp(44), -2));
+        row.addView(value, new LinearLayout.LayoutParams(dp(70), -2));
+        row.addView(plus, new LinearLayout.LayoutParams(dp(44), -2));
         parent.addView(row, new LinearLayout.LayoutParams(-1, -2));
         SeekBar seekBar = new SeekBar(context);
         seekBar.setMax(100);
         seekBar.setProgress(50);
         seekBar.setEnabled(false);
         parent.addView(seekBar, new LinearLayout.LayoutParams(-1, -2));
-        return seekBar;
+        final FineSlider fineSlider = new FineSlider(seekBar, value, minus, plus);
+        minus.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { stepFineSlider(fineSlider, -FINE_STEP_PERCENT); }
+        });
+        plus.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { stepFineSlider(fineSlider, FINE_STEP_PERCENT); }
+        });
+        return fineSlider;
+    }
+
+    private void stepFineSlider(FineSlider slider, int delta) {
+        if (binding || slider == null || !slider.seekBar.isEnabled()) return;
+        slider.setProgress(slider.progress() + delta);
+        updateValueLabels();
+        applyCameraControls();
     }
 
     private void applyCameraControls() {
         updateValueLabels();
-        controller.setCameraControls(brightnessSeekBar.getProgress(), contrastSeekBar.getProgress(), gainSeekBar.getProgress(), exposureSeekBar.getProgress(), autoExposureCheckBox.isChecked());
+        controller.setCameraControls(brightnessSlider.progress(), contrastSlider.progress(), gainSlider.progress(), exposureSlider.progress(), autoExposureCheckBox.isChecked());
     }
 
     private void updateValueLabels() {
-        if (brightnessValueView != null) brightnessValueView.setText(brightnessSeekBar.getProgress() + "%");
-        if (contrastValueView != null) contrastValueView.setText(contrastSeekBar.getProgress() + "%");
-        if (gainValueView != null) gainValueView.setText(gainSeekBar.getProgress() + "%");
-        if (exposureValueView != null) exposureValueView.setText(exposureSeekBar.getProgress() + "%");
+        if (brightnessSlider != null) brightnessSlider.updateLabel();
+        if (contrastSlider != null) contrastSlider.updateLabel();
+        if (gainSlider != null) gainSlider.updateLabel();
+        if (exposureSlider != null) exposureSlider.updateLabel();
     }
 
     private String summary(UvcPreviewController.UvcCapabilities capabilities) {
         StringBuilder b = new StringBuilder();
         b.append(capabilities.statusText == null ? "UVC status unavailable." : capabilities.statusText).append('\n');
-        b.append("Preview: ").append(capabilities.previewRunning ? "running" : "stopped").append('\n');
+        b.append("Preview: ").append(capabilities.previewRunning ? "running; resolution/FPS locked" : "stopped; resolution/FPS selectable").append('\n');
         b.append("Stream modes: ").append(capabilities.streamModes.size()).append('\n');
         if (capabilities.selectedStreamMode != null) b.append("Selected: ").append(capabilities.selectedStreamMode.fullLabel()).append('\n');
         if (capabilities.activeStreamMode != null) b.append("Active: ").append(capabilities.activeStreamMode.fullLabel()).append('\n');
@@ -244,7 +360,7 @@ final class UvcCameraOptionsPanel {
         button.setText(text);
         button.setTextSize(12);
         button.setEnabled(enabled);
-        button.setOnClickListener(listener);
+        if (listener != null) button.setOnClickListener(listener);
         return button;
     }
 
@@ -260,7 +376,7 @@ final class UvcCameraOptionsPanel {
 
     private TextView rightValue() {
         TextView textView = text("—", 11, false);
-        textView.setGravity(Gravity.END);
+        textView.setGravity(Gravity.CENTER);
         return textView;
     }
 
