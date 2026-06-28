@@ -305,10 +305,10 @@ public final class UvcPreviewController {
     }
 
     public void selectStreamMode(StreamMode streamMode) {
-        if (streamMode == null) return;
+        if (streamMode == null || sameStreamMode(streamMode, activeStreamMode)) return;
         requestedStreamMode = streamMode;
-        if (activeCamera != null && pendingOpenDevice != null && activeControlBlock != null) {
-            openDirectUvcCamera(pendingOpenDevice, activeControlBlock, true);
+        if (activeCamera != null) {
+            switchPreviewStreamMode(streamMode);
         }
     }
 
@@ -417,11 +417,7 @@ public final class UvcPreviewController {
                     ? findEquivalentModeOrDefault(requestedStreamMode)
                     : chooseDefaultStreamMode();
             if (selectedMode == null) throw new IllegalStateException("No supported UVC preview mode reported by camera");
-            camera.setPreviewSize(selectedMode.width, selectedMode.height, selectedMode.fps, selectedMode.fps,
-                    selectedMode.frameFormat, UVCCamera.DEFAULT_BANDWIDTH);
-            camera.setPreviewTexture(previewTextureView.getSurfaceTexture());
-            camera.startPreview();
-            camera.updateCameraParams();
+            startPreviewWithMode(camera, selectedMode);
             activeCamera = camera;
             activeControlBlock = controlBlock;
             pendingOpenDevice = device;
@@ -436,6 +432,31 @@ public final class UvcPreviewController {
             clearNativeExposureAccess();
             publishCapabilities("Failed to open/query direct libuvc camera: " + describeThrowable(throwable));
         }
+    }
+
+    private void switchPreviewStreamMode(StreamMode requestedMode) {
+        StreamMode previousMode = activeStreamMode;
+        try {
+            publishCapabilities("Switching UVC stream to " + requestedMode.fullLabel() + "…");
+            activeCamera.stopPreview();
+            startPreviewWithMode(activeCamera, requestedMode);
+            activeStreamMode = requestedMode;
+            requestedStreamMode = requestedMode;
+            applyCameraControls("stream mode changed");
+            applyPreviewFitMode();
+            publishCapabilities("UVC stream switched to " + requestedMode.fullLabel() + ".");
+        } catch (Throwable throwable) {
+            activeStreamMode = previousMode;
+            publishCapabilities("Failed to switch UVC stream mode: " + describeThrowable(throwable));
+        }
+    }
+
+    private void startPreviewWithMode(UVCCamera camera, StreamMode mode) {
+        camera.setPreviewSize(mode.width, mode.height, mode.fps, mode.fps,
+                mode.frameFormat, UVCCamera.DEFAULT_BANDWIDTH);
+        camera.setPreviewTexture(previewTextureView.getSurfaceTexture());
+        camera.startPreview();
+        camera.updateCameraParams();
     }
 
     private void queryDeviceCapabilitiesAfterOpen(UVCCamera camera) {
@@ -502,12 +523,17 @@ public final class UvcPreviewController {
 
     private StreamMode findEquivalentModeOrDefault(StreamMode requestedMode) {
         for (StreamMode mode : availableStreamModes) {
-            if (mode.frameFormat == requestedMode.frameFormat
-                    && mode.width == requestedMode.width
-                    && mode.height == requestedMode.height
-                    && mode.fps == requestedMode.fps) return mode;
+            if (sameStreamMode(mode, requestedMode)) return mode;
         }
         return chooseDefaultStreamMode();
+    }
+
+    private boolean sameStreamMode(StreamMode first, StreamMode second) {
+        return first != null && second != null
+                && first.frameFormat == second.frameFormat
+                && first.width == second.width
+                && first.height == second.height
+                && first.fps == second.fps;
     }
 
     private boolean checkControlSupport(long supportFlag) {
@@ -564,266 +590,3 @@ public final class UvcPreviewController {
 
     private boolean isAutoExposureCurrentlyEnabled() {
         try {
-            updateExposureModeLimit();
-            int currentMode = (Integer) getExposureModeMethod.invoke(null, nativeCameraPointer());
-            return currentMode != MANUAL_EXPOSURE_MODE;
-        } catch (Throwable ignored) {
-            return true;
-        }
-    }
-
-    private boolean setAutoExposureEnabled(boolean enabled) {
-        try {
-            updateExposureModeLimit();
-            int requestedMode = enabled ? preferredAutoExposureMode() : MANUAL_EXPOSURE_MODE;
-            setExposureModeMethod.invoke(null, nativeCameraPointer(), requestedMode);
-            return true;
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
-    private int getExposurePercentFromDevice() {
-        try {
-            updateExposureLimit();
-            int rawExposure = (Integer) getExposureMethod.invoke(null, nativeCameraPointer());
-            return rawExposureToPercent(rawExposure);
-        } catch (Throwable ignored) {
-            return -1;
-        }
-    }
-
-    private boolean setExposurePercentOnDevice(int percent) {
-        try {
-            updateExposureLimit();
-            setExposureMethod.invoke(null, nativeCameraPointer(), percentToRawExposure(percent));
-            return true;
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
-    private String describeExposureRange() {
-        try {
-            updateExposureLimit();
-            return "raw min=" + exposureMinimumField.getInt(activeCamera)
-                    + ", max=" + exposureMaximumField.getInt(activeCamera)
-                    + ", def=" + exposureDefaultField.getInt(activeCamera);
-        } catch (Throwable ignored) {
-            return "raw range unavailable";
-        }
-    }
-
-    private void updateExposureLimit() throws ReflectiveOperationException {
-        updateExposureLimitMethod.invoke(activeCamera, nativeCameraPointer());
-    }
-
-    private void updateExposureModeLimit() throws ReflectiveOperationException {
-        updateExposureModeLimitMethod.invoke(activeCamera, nativeCameraPointer());
-    }
-
-    private long nativeCameraPointer() throws IllegalAccessException {
-        return exposureNativePointerField.getLong(activeCamera);
-    }
-
-    private int preferredAutoExposureMode() throws IllegalAccessException {
-        int defaultMode = exposureModeDefaultField.getInt(activeCamera);
-        return defaultMode == MANUAL_EXPOSURE_MODE ? AUTO_EXPOSURE_MODE : defaultMode;
-    }
-
-    private int rawExposureToPercent(int rawExposure) throws IllegalAccessException {
-        int min = exposureMinimumField.getInt(activeCamera);
-        int max = exposureMaximumField.getInt(activeCamera);
-        int range = Math.abs(max - min);
-        return range <= 0 ? 0 : clamp(Math.round((rawExposure - min) * 100.0f / range), 0, 100);
-    }
-
-    private int percentToRawExposure(int percent) throws IllegalAccessException {
-        int min = exposureMinimumField.getInt(activeCamera);
-        int max = exposureMaximumField.getInt(activeCamera);
-        return Math.round(min + (Math.abs(max - min) * clamp(percent, 0, 100) / 100.0f));
-    }
-
-    private static Field accessibleField(Class<?> cls, String name) throws NoSuchFieldException {
-        Field field = cls.getDeclaredField(name);
-        field.setAccessible(true);
-        return field;
-    }
-
-    private static Method accessibleMethod(Class<?> cls, String name, Class<?>... parameterTypes) throws NoSuchMethodException {
-        Method method = cls.getDeclaredMethod(name, parameterTypes);
-        method.setAccessible(true);
-        return method;
-    }
-
-    private void applyPreviewFitModeLater() {
-        previewTextureView.postDelayed(new Runnable() { @Override public void run() { applyPreviewFitMode(); } }, PREVIEW_SURFACE_RETRY_DELAY_MS);
-    }
-
-    private void applyPreviewFitMode() {
-        previewTextureView.post(new Runnable() { @Override public void run() { applyPreviewFitModeNow(); } });
-    }
-
-    private void applyPreviewFitModeNow() {
-        int cw = previewContainer.getWidth();
-        int ch = previewContainer.getHeight();
-        if (cw <= 0 || ch <= 0) return;
-        float sourceAspect = activeStreamMode != null ? activeStreamMode.width / (float) activeStreamMode.height : DEFAULT_PREVIEW_ASPECT_RATIO;
-        int tw = cw;
-        int th = ch;
-        if (previewFitMode != PreviewFitMode.STRETCH) {
-            boolean containerWide = cw / (float) ch > sourceAspect;
-            if (previewFitMode == PreviewFitMode.CONTAIN) {
-                if (containerWide) { th = ch; tw = Math.round(th * sourceAspect); }
-                else { tw = cw; th = Math.round(tw / sourceAspect); }
-            } else {
-                if (containerWide) { tw = cw; th = Math.round(tw / sourceAspect); }
-                else { th = ch; tw = Math.round(th * sourceAspect); }
-            }
-        }
-        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) previewTextureView.getLayoutParams();
-        tw = Math.max(1, tw);
-        th = Math.max(1, th);
-        if (params.width != tw || params.height != th || params.gravity != Gravity.CENTER) {
-            params.width = tw;
-            params.height = th;
-            params.gravity = Gravity.CENTER;
-            previewTextureView.setLayoutParams(params);
-        }
-        previewTextureView.setTranslationX(0.0f);
-        previewTextureView.setTranslationY(0.0f);
-        previewTextureView.setScaleX(1.0f);
-        previewTextureView.setScaleY(1.0f);
-        previewTextureView.setPivotX(tw / 2.0f);
-        previewTextureView.setPivotY(th / 2.0f);
-    }
-
-    private void scheduleOpenRetry(final UsbDevice device, final USBMonitor.UsbControlBlock controlBlock) {
-        if (openRetryScheduled) return;
-        openRetryScheduled = true;
-        previewTextureView.postDelayed(new Runnable() {
-            @Override public void run() {
-                openRetryScheduled = false;
-                if (previewTextureView.isAvailable() && previewTextureView.getSurfaceTexture() != null) openDirectUvcCamera(device, controlBlock, false);
-                else publishCapabilities("Preview surface still unavailable. Preview view size: " + previewTextureView.getWidth() + "×" + previewTextureView.getHeight() + ".");
-            }
-        }, PREVIEW_SURFACE_RETRY_DELAY_MS);
-    }
-
-    private void refreshDetectedUvcDeviceCache() {
-        try {
-            for (UsbDevice device : usbMonitor.getDeviceList()) if (isUvcVideoDevice(device)) rememberDetectedDevice(device);
-        } catch (Throwable throwable) {
-            notifyStatus("USB device scan failed: " + describeThrowable(throwable));
-        }
-    }
-
-    private UvcCapabilities buildCapabilities(String statusText) {
-        return new UvcCapabilities(
-                activeCamera != null,
-                availableStreamModes,
-                activeStreamMode,
-                brightnessSupported,
-                contrastSupported,
-                gainSupported,
-                exposureSupported,
-                autoExposureSupported,
-                exposurePercent,
-                autoExposureEnabled,
-                nativeExposureAccessReady ? describeExposureRange() : "native exposure access unavailable",
-                statusText);
-    }
-
-    private void publishCapabilities(String statusText) {
-        final UvcCapabilities capabilities = buildCapabilities(statusText);
-        notifyStatus(statusText);
-        mainThreadHandler.post(new Runnable() {
-            @Override public void run() {
-                if (cameraOptionsPanel != null) cameraOptionsPanel.update(capabilities);
-                if (listener != null) listener.onUvcCapabilitiesChanged(capabilities);
-            }
-        });
-    }
-
-    private String describeStreamModes() {
-        if (availableStreamModes.isEmpty()) return "No stream modes reported.";
-        StringBuilder builder = new StringBuilder("Stream modes:");
-        int shown = 0;
-        for (StreamMode mode : availableStreamModes) {
-            if (shown >= 16) {
-                builder.append("\n  …");
-                break;
-            }
-            builder.append("\n  • ").append(mode.fullLabel());
-            shown++;
-        }
-        return builder.toString();
-    }
-
-    private String buildDebugExportText() {
-        StringBuilder builder = new StringBuilder();
-        builder.append("Android Polaris UVC debug log\n");
-        builder.append("Generated: ").append(String.format(Locale.US, "%tF %<tT", new Date())).append('\n');
-        builder.append("Device: ").append(Build.MANUFACTURER).append(' ')
-                .append(Build.MODEL).append(" / Android ")
-                .append(Build.VERSION.RELEASE).append('\n');
-        builder.append('\n').append("Current UVC state:\n").append(describeConnectedUvcDevices()).append('\n');
-        builder.append('\n').append("Log:\n")
-                .append(debugLogBuilder.length() == 0 ? "No UVC log lines recorded." : debugLogBuilder.toString().trim());
-        return builder.toString();
-    }
-
-    private void rememberDetectedDevice(UsbDevice device) {
-        if (device != null) detectedUvcDevicesById.put(device.getDeviceId(), device);
-    }
-
-    private UsbDevice getFirstDetectedUvcDevice() {
-        for (UsbDevice device : detectedUvcDevicesById.values()) return device;
-        return null;
-    }
-
-    private boolean isUvcVideoDevice(UsbDevice device) {
-        if (device == null) return false;
-        for (int i = 0; i < device.getInterfaceCount(); i++) {
-            UsbInterface usbInterface = device.getInterface(i);
-            if (usbInterface != null && usbInterface.getInterfaceClass() == USB_VIDEO_CLASS) return true;
-        }
-        return false;
-    }
-
-    private String describeDeviceBrief(UsbDevice device) {
-        return String.format(Locale.US, "VID %04x / PID %04x", device.getVendorId(), device.getProductId());
-    }
-
-    private String describeDeviceLong(UsbDevice device) {
-        return String.format(Locale.US, "VID %04x / PID %04x, interfaces=%d, name=%s",
-                device.getVendorId(), device.getProductId(), device.getInterfaceCount(), device.getDeviceName());
-    }
-
-    private void notifyStatus(final String statusText) {
-        recordDebugLine(statusText);
-        mainThreadHandler.post(new Runnable() {
-            @Override public void run() {
-                if (listener != null) listener.onUvcStatusChanged(statusText);
-            }
-        });
-    }
-
-    private void recordDebugLine(String message) {
-        if (message == null || message.trim().isEmpty()) return;
-        debugLogBuilder.append(String.format(Locale.US, "[%tF %<tT] %s\n", new Date(), message.trim()));
-        if (debugLogBuilder.length() > MAX_DEBUG_LOG_CHARS) {
-            debugLogBuilder.delete(0, debugLogBuilder.length() - MAX_DEBUG_LOG_CHARS);
-        }
-    }
-
-    private static int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(max, value));
-    }
-
-    private static String describeThrowable(Throwable throwable) {
-        String message = throwable.getMessage();
-        return throwable.getClass().getSimpleName() + ": "
-                + (message == null || message.trim().isEmpty() ? "no detail message" : message);
-    }
-}
