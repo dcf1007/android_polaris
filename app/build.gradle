@@ -10,8 +10,8 @@ android {
         applicationId 'com.dcf1007.androidpolaris'
         minSdk 23
         targetSdk 33
-        versionCode 40
-        versionName '0.2.38'
+        versionCode 41
+        versionName '0.2.39'
     }
 
     compileOptions {
@@ -21,5 +21,5 @@ android {
 }
 
 dependencies {
-    implementation "com.github.jiangdongguo.AndroidUSBCamera:libuvc:3.2.7"
+    implementation 'com.github.jiangdongguo.AndroidUSBCamera:libuvc:3.2.7'
 }
