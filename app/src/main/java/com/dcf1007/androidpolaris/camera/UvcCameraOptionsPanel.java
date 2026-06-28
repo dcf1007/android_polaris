@@ -25,10 +25,13 @@ import java.util.List;
  * UI binding for queried UVC capabilities.
  *
  * <p>The controller queries the camera and publishes a UvcCapabilities snapshot.
- * This panel is inserted as the first category in the app's existing camera panel,
+ * This panel is inserted into the existing camera panel under the USB buttons,
  * so it behaves like the rest of the interface instead of floating above the reticle.</p>
  */
 final class UvcCameraOptionsPanel {
+    private static final int MIN_SAFE_STREAM_PIXELS = 320 * 240;
+    private static final int HIGH_STREAM_PIXELS = 1280 * 720;
+
     private final Context context;
     private final UvcPreviewController controller;
 
@@ -110,7 +113,7 @@ final class UvcCameraOptionsPanel {
 
         panel = new LinearLayout(context);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(0, 0, 0, dp(8));
+        panel.setPadding(0, dp(8), 0, dp(8));
 
         titleView = text("UVC hardware controls  ▲", 13, true);
         titleView.setOnClickListener(new View.OnClickListener() {
@@ -158,7 +161,10 @@ final class UvcCameraOptionsPanel {
         });
         body.addView(saveLogButton, new LinearLayout.LayoutParams(-1, -2));
 
-        mainCameraPanel.addView(panel, 0, new LinearLayout.LayoutParams(-1, -2));
+        // Camera panel children are: title, open/status row, stop button, then status text.
+        // Insert here so hardware controls live under the buttons and above the status block.
+        int insertIndex = Math.min(3, mainCameraPanel.getChildCount());
+        mainCameraPanel.addView(panel, insertIndex, new LinearLayout.LayoutParams(-1, -2));
         wireActions();
         updateValueLabels();
     }
@@ -193,6 +199,12 @@ final class UvcCameraOptionsPanel {
                 if (binding || position < 0 || position >= streamModes.size()) return;
                 UvcPreviewController.StreamMode selectedMode = streamModes.get(position);
                 if (sameMode(selectedMode, activeStreamMode)) return;
+                if (isKnownUnsafeLowMode(selectedMode)) {
+                    capabilitySummaryView.setText("Rejected " + selectedMode.fullLabel()
+                            + " because very small UVC modes have been observed to hang this camera. Choose 320×240 or larger.");
+                    restoreActiveStreamSelection();
+                    return;
+                }
                 controller.selectStreamMode(selectedMode);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
@@ -238,6 +250,19 @@ final class UvcCameraOptionsPanel {
         return seekBar;
     }
 
+    private void restoreActiveStreamSelection() {
+        int activeIndex = indexOfEquivalentMode(activeStreamMode);
+        if (activeIndex >= 0) {
+            binding = true;
+            streamModeSpinner.setSelection(activeIndex, false);
+            binding = false;
+        }
+    }
+
+    private boolean isKnownUnsafeLowMode(UvcPreviewController.StreamMode mode) {
+        return mode != null && mode.width * mode.height < MIN_SAFE_STREAM_PIXELS;
+    }
+
     private void updateExposureSliderEnabledState(boolean autoExposureEnabled) {
         if (exposureSeekBar != null) {
             exposureSeekBar.setEnabled(lastCameraOpen && lastExposureSupported && !autoExposureEnabled);
@@ -270,6 +295,11 @@ final class UvcCameraOptionsPanel {
         builder.append("Gain: ").append(capabilities.gainSupported ? "available" : "not reported").append('\n');
         builder.append("Exposure: ").append(capabilities.exposureSupported ? capabilities.exposureRangeText : "not reported").append('\n');
         builder.append("Auto exposure: ").append(capabilities.autoExposureSupported ? "available" : "not reported").append('\n');
+        if (capabilities.activeStreamMode != null
+                && capabilities.activeStreamMode.width * capabilities.activeStreamMode.height > HIGH_STREAM_PIXELS) {
+            builder.append("Current stream is high resolution and may lag on USB/phone bandwidth.\n");
+        }
+        builder.append("Very small modes below 320×240 are listed by some cameras but blocked here because they can hang this device.\n");
         builder.append("Colour/B&W/day-night: not reported as a standard UVC control.");
         return builder.toString();
     }
