@@ -1,11 +1,13 @@
 package com.dcf1007.androidpolaris.camera;
 
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.CompoundButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
@@ -15,35 +17,48 @@ import android.widget.TextView;
 import java.util.Locale;
 
 /**
- * Startup organizer for the programmatic MainActivity layout.
+ * Startup UI normalizer for MainActivity's programmatic layout.
  *
- * <p>This keeps the static app layout consistent at launch: the camera button wording is updated,
- * video-fit controls move into video alignment, collapsible section headers are enabled, and a
- * disabled UVC hardware-controls section is visible before any camera has been queried.</p>
+ * <p>MainActivity still owns the screen layout. This class performs one explicit, readable pass over
+ * that layout after creation: it standardizes typography, moves the video-fit row to the video
+ * alignment section, creates the disabled UVC hardware section that must be visible before query,
+ * enables consistent collapsible category headers, and removes visible text that no longer matches
+ * the current direct-libuvc/query-first behavior.</p>
  */
 public final class MainInterfaceOrganizer {
     static final String HARDWARE_CONTROLS_TAG = "android-polaris-uvc-hardware-controls";
 
-    private static final String[] COLLAPSIBLE_SECTION_NAMES = {
+    private static final int COLOR_TEXT = Color.rgb(243, 245, 247);
+    private static final int COLOR_MUTED = Color.rgb(174, 182, 194);
+    private static final int HEADER_SIZE_SP = 13;
+    private static final int BODY_SIZE_SP = 12;
+    private static final int SMALL_SIZE_SP = 11;
+
+    private static final String[] COLLAPSIBLE_HEADER_TITLES = {
             "ALIGNMENT", "VISIBILITY", "POLARIS ALIGNMENT", "STATUS", "READOUTS", "DEBUG LOG"
     };
 
     private MainInterfaceOrganizer() { }
 
+    /** Runs once per activity render pass. The method is idempotent and safe to call again. */
     public static void organize(View root) {
         LinearLayout controlsColumn = findControlsColumn(root);
         if (controlsColumn == null) return;
+
+        replaceObsoleteVisibleText(root);
         relabelOpenCameraButton(controlsColumn);
         moveVideoFitRowToAlignmentPanel(controlsColumn);
         ensureDisabledHardwareControlsAreVisible(controlsColumn);
-        installCollapsibleSectionHeaders(controlsColumn);
+        installConsistentCollapsibleHeaders(controlsColumn);
+        standardizeTypography(root);
     }
 
+    /** Returns the camera panel used by the live UVC controls. */
     public static LinearLayout findFirstPanelInScrollableControls(View root) {
         LinearLayout controlsColumn = findControlsColumn(root);
         if (controlsColumn == null) return null;
-        for (int i = 0; i < controlsColumn.getChildCount(); i++) {
-            View child = controlsColumn.getChildAt(i);
+        for (int index = 0; index < controlsColumn.getChildCount(); index++) {
+            View child = controlsColumn.getChildAt(index);
             if (child instanceof LinearLayout) return (LinearLayout) child;
         }
         return null;
@@ -60,11 +75,23 @@ public final class MainInterfaceOrganizer {
         if (view instanceof ScrollView) return (ScrollView) view;
         if (!(view instanceof ViewGroup)) return null;
         ViewGroup group = (ViewGroup) view;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            ScrollView found = findFirstScrollView(group.getChildAt(i));
+        for (int index = 0; index < group.getChildCount(); index++) {
+            ScrollView found = findFirstScrollView(group.getChildAt(index));
             if (found != null) return found;
         }
         return null;
+    }
+
+    private static void replaceObsoleteVisibleText(View root) {
+        replaceText(root,
+                "Open the USB OTG UVC camera, then use the alignment controls to match the video to the reticle. The reticle is native Canvas geometry generated from the full drawing.",
+                "Open/query the USB UVC camera, select a stream mode, then start preview. Use video alignment controls to match the preview to the native reticle.");
+        replaceText(root,
+                "Native Android build. USB/UVC preview uses the AUSBC backend; the reticle is native Canvas geometry. No SVG, WebView or Camera2 preview path is used.",
+                "Native Android build. USB/UVC preview uses direct libuvc. The reticle is native Canvas geometry. No WebView, SVG runtime, or Camera2 preview path is used.");
+        replaceText(root, "Open USB UVC camera", "Open/query USB UVC camera");
+        replaceText(root, "Press Open USB UVC camera to load the UVC backend and request USB permission.",
+                "Open/query the UVC camera to list stream modes and hardware controls.");
     }
 
     private static void relabelOpenCameraButton(LinearLayout controlsColumn) {
@@ -80,8 +107,8 @@ public final class MainInterfaceOrganizer {
         if (videoFitRow == null || videoFitRow.getParent() != cameraPanel) return;
 
         cameraPanel.removeView(videoFitRow);
-        int insertionIndex = findSectionHeaderIndex(alignmentPanel, "ALIGNMENT");
-        alignmentPanel.addView(videoFitRow, insertionIndex < 0 ? 0 : insertionIndex + 1);
+        int alignmentHeaderIndex = findHeaderIndex(alignmentPanel, "ALIGNMENT");
+        alignmentPanel.addView(videoFitRow, alignmentHeaderIndex < 0 ? 0 : alignmentHeaderIndex + 1);
     }
 
     private static void ensureDisabledHardwareControlsAreVisible(LinearLayout controlsColumn) {
@@ -97,25 +124,25 @@ public final class MainInterfaceOrganizer {
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(0, dp(parentView, 8), 0, dp(parentView, 8));
 
-        TextView title = text(parentView, "UVC hardware controls  ▲", 13, true);
+        final TextView title = header(parentView, "UVC HARDWARE CONTROLS  ▲");
         panel.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
-        LinearLayout body = new LinearLayout(parentView.getContext());
+        final LinearLayout body = new LinearLayout(parentView.getContext());
         body.setOrientation(LinearLayout.VERTICAL);
         panel.addView(body, new LinearLayout.LayoutParams(-1, -2));
+        title.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                boolean collapsed = body.getVisibility() == View.VISIBLE;
+                body.setVisibility(collapsed ? View.GONE : View.VISIBLE);
+                title.setText(collapsed ? "UVC HARDWARE CONTROLS  ▼" : "UVC HARDWARE CONTROLS  ▲");
+            }
+        });
 
-        body.addView(text(parentView, "Stream mode", 11, false), new LinearLayout.LayoutParams(-1, -2));
+        body.addView(label(parentView, "Stream mode"), new LinearLayout.LayoutParams(-1, -2));
         Spinner streamSpinner = new Spinner(parentView.getContext());
         streamSpinner.setEnabled(false);
         body.addView(streamSpinner, new LinearLayout.LayoutParams(-1, -2));
-
-        Button startButton = new Button(parentView.getContext());
-        startButton.setAllCaps(false);
-        startButton.setText("Start selected stream");
-        startButton.setTextSize(12);
-        startButton.setEnabled(false);
-        body.addView(startButton, new LinearLayout.LayoutParams(-1, -2));
-
+        body.addView(disabledButton(parentView, "Start selected stream"), new LinearLayout.LayoutParams(-1, -2));
         body.addView(disabledSlider(parentView, "Brightness"));
         body.addView(disabledSlider(parentView, "Contrast"));
         body.addView(disabledSlider(parentView, "Gain"));
@@ -123,25 +150,32 @@ public final class MainInterfaceOrganizer {
 
         CheckBox autoExposure = new CheckBox(parentView.getContext());
         autoExposure.setText("Auto exposure");
-        autoExposure.setTextColor(Color.rgb(243, 245, 247));
-        autoExposure.setTextSize(12);
         autoExposure.setEnabled(false);
         body.addView(autoExposure, new LinearLayout.LayoutParams(-1, -2));
 
-        TextView summary = text(parentView, "Open/query the UVC camera to list stream modes and controls.", 11, false);
-        summary.setTextColor(Color.rgb(180, 190, 203));
+        TextView summary = label(parentView, "Open/query the UVC camera to list stream modes and hardware controls.");
+        summary.setTextColor(COLOR_MUTED);
         body.addView(summary, new LinearLayout.LayoutParams(-1, -2));
         return panel;
     }
 
-    private static LinearLayout disabledSlider(View parentView, String label) {
+    private static Button disabledButton(View parentView, String text) {
+        Button button = new Button(parentView.getContext());
+        button.setAllCaps(false);
+        button.setText(text);
+        button.setTextSize(BODY_SIZE_SP);
+        button.setEnabled(false);
+        return button;
+    }
+
+    private static LinearLayout disabledSlider(View parentView, String labelText) {
         LinearLayout group = new LinearLayout(parentView.getContext());
         group.setOrientation(LinearLayout.VERTICAL);
 
         LinearLayout row = new LinearLayout(parentView.getContext());
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.addView(text(parentView, label, 11, false), new LinearLayout.LayoutParams(0, -2, 1.0f));
-        TextView value = text(parentView, "—", 11, false);
+        row.addView(label(parentView, labelText), new LinearLayout.LayoutParams(0, -2, 1.0f));
+        TextView value = label(parentView, "—");
         value.setGravity(Gravity.END);
         row.addView(value, new LinearLayout.LayoutParams(0, -2, 1.0f));
         group.addView(row, new LinearLayout.LayoutParams(-1, -2));
@@ -155,45 +189,13 @@ public final class MainInterfaceOrganizer {
     }
 
     private static boolean hasHardwareControlsPanel(LinearLayout cameraPanel) {
-        for (int i = 0; i < cameraPanel.getChildCount(); i++) {
-            if (HARDWARE_CONTROLS_TAG.equals(cameraPanel.getChildAt(i).getTag())) return true;
+        for (int index = 0; index < cameraPanel.getChildCount(); index++) {
+            if (HARDWARE_CONTROLS_TAG.equals(cameraPanel.getChildAt(index).getTag())) return true;
         }
         return false;
     }
 
-    static void removeHardwareControlsPlaceholder(LinearLayout cameraPanel) {
-        for (int i = cameraPanel.getChildCount() - 1; i >= 0; i--) {
-            if (HARDWARE_CONTROLS_TAG.equals(cameraPanel.getChildAt(i).getTag())) cameraPanel.removeViewAt(i);
-        }
-    }
-
-    private static LinearLayout childLinearLayoutAt(LinearLayout parent, int index) {
-        if (parent == null || index < 0 || index >= parent.getChildCount()) return null;
-        View child = parent.getChildAt(index);
-        return child instanceof LinearLayout ? (LinearLayout) child : null;
-    }
-
-    private static View findDirectChildContainingCameraFitControls(LinearLayout panel) {
-        for (int i = 0; i < panel.getChildCount(); i++) {
-            View child = panel.getChildAt(i);
-            if (containsText(child, "Video fit")
-                    && containsCheckBoxText(child, "Mirror video")
-                    && containsCheckBoxText(child, "Lock width/height")) {
-                return child;
-            }
-        }
-        return null;
-    }
-
-    private static int findSectionHeaderIndex(LinearLayout panel, String normalizedTitle) {
-        for (int i = 0; i < panel.getChildCount(); i++) {
-            View child = panel.getChildAt(i);
-            if (child instanceof TextView && normalizedHeaderText((TextView) child).equals(normalizedTitle)) return i;
-        }
-        return -1;
-    }
-
-    private static void installCollapsibleSectionHeaders(LinearLayout controlsColumn) {
+    private static void installConsistentCollapsibleHeaders(LinearLayout controlsColumn) {
         for (int panelIndex = 0; panelIndex < controlsColumn.getChildCount(); panelIndex++) {
             View child = controlsColumn.getChildAt(panelIndex);
             if (child instanceof LinearLayout) installHeadersInPanel((LinearLayout) child);
@@ -201,15 +203,14 @@ public final class MainInterfaceOrganizer {
     }
 
     private static void installHeadersInPanel(final LinearLayout panel) {
-        for (int i = 0; i < panel.getChildCount(); i++) {
-            View child = panel.getChildAt(i);
+        for (int index = 0; index < panel.getChildCount(); index++) {
+            View child = panel.getChildAt(index);
             if (!(child instanceof TextView)) continue;
             final TextView header = (TextView) child;
             final String title = normalizedHeaderText(header);
-            if (!isCollapsibleTitle(title)) continue;
-            if (Boolean.TRUE.equals(header.getTag())) continue;
+            if (!isCollapsibleHeader(title) || Boolean.TRUE.equals(header.getTag())) continue;
             header.setTag(Boolean.TRUE);
-            header.setText(title + "  ▲");
+            applyHeaderStyle(header, title + "  ▲");
             header.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) {
                     boolean collapsed = !header.isSelected();
@@ -224,18 +225,66 @@ public final class MainInterfaceOrganizer {
     private static void setSectionBodyVisible(LinearLayout panel, TextView header, boolean visible) {
         int headerIndex = panel.indexOfChild(header);
         if (headerIndex < 0) return;
-        for (int i = headerIndex + 1; i < panel.getChildCount(); i++) {
-            View child = panel.getChildAt(i);
-            if (child instanceof TextView && isCollapsibleTitle(normalizedHeaderText((TextView) child))) break;
+        for (int index = headerIndex + 1; index < panel.getChildCount(); index++) {
+            View child = panel.getChildAt(index);
+            if (child instanceof TextView && isCollapsibleHeader(normalizedHeaderText((TextView) child))) break;
             child.setVisibility(visible ? View.VISIBLE : View.GONE);
         }
     }
 
-    private static boolean isCollapsibleTitle(String title) {
-        for (String candidate : COLLAPSIBLE_SECTION_NAMES) {
-            if (candidate.equals(title)) return true;
+    private static void standardizeTypography(View view) {
+        if (view instanceof TextView) {
+            TextView textView = (TextView) view;
+            String normalized = normalizedHeaderText(textView);
+            if (isCollapsibleHeader(normalized) || normalized.startsWith("UVC HARDWARE CONTROLS")) {
+                applyHeaderStyle(textView, textView.getText());
+            } else {
+                textView.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
+                if (textView.getTextSize() > 0) textView.setTextColor(textView.isEnabled() ? COLOR_TEXT : COLOR_MUTED);
+            }
+            if (view instanceof Button) ((Button) view).setAllCaps(false);
+            if (view instanceof CompoundButton) ((CompoundButton) view).setTextSize(BODY_SIZE_SP);
         }
+        if (!(view instanceof ViewGroup)) return;
+        ViewGroup group = (ViewGroup) view;
+        for (int index = 0; index < group.getChildCount(); index++) standardizeTypography(group.getChildAt(index));
+    }
+
+    private static void applyHeaderStyle(TextView textView, CharSequence text) {
+        textView.setText(text);
+        textView.setTextSize(HEADER_SIZE_SP);
+        textView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        textView.setTextColor(COLOR_TEXT);
+        textView.setPadding(0, dp(textView, 4), 0, dp(textView, 4));
+    }
+
+    private static boolean isCollapsibleHeader(String title) {
+        for (String candidate : COLLAPSIBLE_HEADER_TITLES) if (candidate.equals(title)) return true;
         return false;
+    }
+
+    private static LinearLayout childLinearLayoutAt(LinearLayout parent, int index) {
+        if (parent == null || index < 0 || index >= parent.getChildCount()) return null;
+        View child = parent.getChildAt(index);
+        return child instanceof LinearLayout ? (LinearLayout) child : null;
+    }
+
+    private static View findDirectChildContainingCameraFitControls(LinearLayout panel) {
+        for (int index = 0; index < panel.getChildCount(); index++) {
+            View child = panel.getChildAt(index);
+            if (containsText(child, "Video fit")
+                    && containsCheckBoxText(child, "Mirror video")
+                    && containsCheckBoxText(child, "Lock width/height")) return child;
+        }
+        return null;
+    }
+
+    private static int findHeaderIndex(LinearLayout panel, String normalizedTitle) {
+        for (int index = 0; index < panel.getChildCount(); index++) {
+            View child = panel.getChildAt(index);
+            if (child instanceof TextView && normalizedHeaderText((TextView) child).equals(normalizedTitle)) return index;
+        }
+        return -1;
     }
 
     private static String normalizedHeaderText(TextView textView) {
@@ -243,13 +292,19 @@ public final class MainInterfaceOrganizer {
         return text.toUpperCase(Locale.US);
     }
 
-    private static TextView text(View parentView, String text, int sizeSp, boolean bold) {
+    private static TextView header(View parentView, String text) {
+        TextView textView = new TextView(parentView.getContext());
+        applyHeaderStyle(textView, text);
+        return textView;
+    }
+
+    private static TextView label(View parentView, String text) {
         TextView textView = new TextView(parentView.getContext());
         textView.setText(text);
-        textView.setTextSize(sizeSp);
-        textView.setTextColor(Color.rgb(243, 245, 247));
+        textView.setTextSize(SMALL_SIZE_SP);
+        textView.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
+        textView.setTextColor(COLOR_TEXT);
         textView.setPadding(0, dp(parentView, 2), 0, dp(parentView, 2));
-        if (bold) textView.setTypeface(textView.getTypeface(), android.graphics.Typeface.BOLD);
         return textView;
     }
 
@@ -261,7 +316,7 @@ public final class MainInterfaceOrganizer {
         if (view instanceof TextView && wantedText.contentEquals(((TextView) view).getText())) return true;
         if (!(view instanceof ViewGroup)) return false;
         ViewGroup group = (ViewGroup) view;
-        for (int i = 0; i < group.getChildCount(); i++) if (containsText(group.getChildAt(i), wantedText)) return true;
+        for (int index = 0; index < group.getChildCount(); index++) if (containsText(group.getChildAt(index), wantedText)) return true;
         return false;
     }
 
@@ -269,17 +324,14 @@ public final class MainInterfaceOrganizer {
         if (view instanceof CheckBox && wantedText.contentEquals(((CheckBox) view).getText())) return true;
         if (!(view instanceof ViewGroup)) return false;
         ViewGroup group = (ViewGroup) view;
-        for (int i = 0; i < group.getChildCount(); i++) if (containsCheckBoxText(group.getChildAt(i), wantedText)) return true;
+        for (int index = 0; index < group.getChildCount(); index++) if (containsCheckBoxText(group.getChildAt(index), wantedText)) return true;
         return false;
     }
 
     private static void replaceText(View view, String from, String to) {
-        if (view instanceof TextView && from.contentEquals(((TextView) view).getText())) {
-            ((TextView) view).setText(to);
-            return;
-        }
+        if (view instanceof TextView && from.contentEquals(((TextView) view).getText())) ((TextView) view).setText(to);
         if (!(view instanceof ViewGroup)) return;
         ViewGroup group = (ViewGroup) view;
-        for (int i = 0; i < group.getChildCount(); i++) replaceText(group.getChildAt(i), from, to);
+        for (int index = 0; index < group.getChildCount(); index++) replaceText(group.getChildAt(index), from, to);
     }
 }
