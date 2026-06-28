@@ -29,7 +29,6 @@ import java.util.List;
  * so it behaves like the rest of the interface instead of floating above the reticle.</p>
  */
 final class UvcCameraOptionsPanel {
-    private static final int MIN_SAFE_STREAM_PIXELS = 320 * 240;
     private static final int HIGH_STREAM_PIXELS = 1280 * 720;
 
     private final Context context;
@@ -199,12 +198,6 @@ final class UvcCameraOptionsPanel {
                 if (binding || position < 0 || position >= streamModes.size()) return;
                 UvcPreviewController.StreamMode selectedMode = streamModes.get(position);
                 if (sameMode(selectedMode, activeStreamMode)) return;
-                if (isKnownUnsafeLowMode(selectedMode)) {
-                    capabilitySummaryView.setText("Rejected " + selectedMode.fullLabel()
-                            + " because very small UVC modes have been observed to hang this camera. Choose 320×240 or larger.");
-                    restoreActiveStreamSelection();
-                    return;
-                }
                 controller.selectStreamMode(selectedMode);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
@@ -250,19 +243,6 @@ final class UvcCameraOptionsPanel {
         return seekBar;
     }
 
-    private void restoreActiveStreamSelection() {
-        int activeIndex = indexOfEquivalentMode(activeStreamMode);
-        if (activeIndex >= 0) {
-            binding = true;
-            streamModeSpinner.setSelection(activeIndex, false);
-            binding = false;
-        }
-    }
-
-    private boolean isKnownUnsafeLowMode(UvcPreviewController.StreamMode mode) {
-        return mode != null && mode.width * mode.height < MIN_SAFE_STREAM_PIXELS;
-    }
-
     private void updateExposureSliderEnabledState(boolean autoExposureEnabled) {
         if (exposureSeekBar != null) {
             exposureSeekBar.setEnabled(lastCameraOpen && lastExposureSupported && !autoExposureEnabled);
@@ -299,7 +279,7 @@ final class UvcCameraOptionsPanel {
                 && capabilities.activeStreamMode.width * capabilities.activeStreamMode.height > HIGH_STREAM_PIXELS) {
             builder.append("Current stream is high resolution and may lag on USB/phone bandwidth.\n");
         }
-        builder.append("Very small modes below 320×240 are listed by some cameras but blocked here because they can hang this device.\n");
+        builder.append("If a selected mode hangs, export the UVC log after recovery so the failing format can be diagnosed.\n");
         builder.append("Colour/B&W/day-night: not reported as a standard UVC control.");
         return builder.toString();
     }
