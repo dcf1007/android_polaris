@@ -13,7 +13,6 @@ import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -113,7 +112,8 @@ final class UvcCameraOptionsPanel {
     private void attachInsideMainCameraPanel() {
         if (!(context instanceof Activity)) return;
         FrameLayout activityContent = ((Activity) context).findViewById(android.R.id.content);
-        LinearLayout mainCameraPanel = findFirstPanelInScrollableControls(activityContent);
+        MainInterfaceOrganizer.organize(activityContent);
+        LinearLayout mainCameraPanel = MainInterfaceOrganizer.findFirstPanelInScrollableControls(activityContent);
         if (mainCameraPanel == null) return;
 
         panel = new LinearLayout(context);
@@ -183,30 +183,6 @@ final class UvcCameraOptionsPanel {
         mainCameraPanel.addView(panel, insertIndex, new LinearLayout.LayoutParams(-1, -2));
         wireActions();
         updateValueLabels();
-    }
-
-    private LinearLayout findFirstPanelInScrollableControls(View root) {
-        ScrollView controlsScroll = findFirstScrollView(root);
-        if (controlsScroll == null || controlsScroll.getChildCount() == 0) return null;
-        View controlsChild = controlsScroll.getChildAt(0);
-        if (!(controlsChild instanceof LinearLayout)) return null;
-        LinearLayout controlsColumn = (LinearLayout) controlsChild;
-        for (int i = 0; i < controlsColumn.getChildCount(); i++) {
-            View child = controlsColumn.getChildAt(i);
-            if (child instanceof LinearLayout) return (LinearLayout) child;
-        }
-        return null;
-    }
-
-    private ScrollView findFirstScrollView(View view) {
-        if (view instanceof ScrollView) return (ScrollView) view;
-        if (!(view instanceof ViewGroup)) return null;
-        ViewGroup group = (ViewGroup) view;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            ScrollView found = findFirstScrollView(group.getChildAt(i));
-            if (found != null) return found;
-        }
-        return null;
     }
 
     private void wireActions() {
