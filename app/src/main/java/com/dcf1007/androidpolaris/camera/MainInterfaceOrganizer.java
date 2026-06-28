@@ -1,34 +1,41 @@
 package com.dcf1007.androidpolaris.camera;
 
+import android.graphics.Color;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.widget.Spinner;
 import android.widget.TextView;
 
 import java.util.Locale;
 
 /**
- * Small UI organizer for the programmatic MainActivity layout.
+ * Startup organizer for the programmatic MainActivity layout.
  *
- * <p>MainActivity currently builds the interface directly in Java. This helper makes the existing
- * section headers collapsible, moves video-fit controls into the video-alignment section, and
- * updates camera wording to match the capability-query-first UVC lifecycle.</p>
+ * <p>This keeps the static app layout consistent at launch: the camera button wording is updated,
+ * video-fit controls move into video alignment, collapsible section headers are enabled, and a
+ * disabled UVC hardware-controls section is visible before any camera has been queried.</p>
  */
 public final class MainInterfaceOrganizer {
+    static final String HARDWARE_CONTROLS_TAG = "android-polaris-uvc-hardware-controls";
+
     private static final String[] COLLAPSIBLE_SECTION_NAMES = {
             "ALIGNMENT", "VISIBILITY", "POLARIS ALIGNMENT", "STATUS", "READOUTS", "DEBUG LOG"
     };
 
     private MainInterfaceOrganizer() { }
 
-    /** Applies static layout organization immediately after MainActivity has built its panels. */
     public static void organize(View root) {
         LinearLayout controlsColumn = findControlsColumn(root);
         if (controlsColumn == null) return;
         relabelOpenCameraButton(controlsColumn);
         moveVideoFitRowToAlignmentPanel(controlsColumn);
+        ensureDisabledHardwareControlsAreVisible(controlsColumn);
         installCollapsibleSectionHeaders(controlsColumn);
     }
 
@@ -75,6 +82,89 @@ public final class MainInterfaceOrganizer {
         cameraPanel.removeView(videoFitRow);
         int insertionIndex = findSectionHeaderIndex(alignmentPanel, "ALIGNMENT");
         alignmentPanel.addView(videoFitRow, insertionIndex < 0 ? 0 : insertionIndex + 1);
+    }
+
+    private static void ensureDisabledHardwareControlsAreVisible(LinearLayout controlsColumn) {
+        LinearLayout cameraPanel = childLinearLayoutAt(controlsColumn, 0);
+        if (cameraPanel == null || hasHardwareControlsPanel(cameraPanel)) return;
+        cameraPanel.addView(createDisabledHardwareControlsPlaceholder(cameraPanel),
+                Math.min(3, cameraPanel.getChildCount()), new LinearLayout.LayoutParams(-1, -2));
+    }
+
+    private static LinearLayout createDisabledHardwareControlsPlaceholder(View parentView) {
+        LinearLayout panel = new LinearLayout(parentView.getContext());
+        panel.setTag(HARDWARE_CONTROLS_TAG);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(0, dp(parentView, 8), 0, dp(parentView, 8));
+
+        TextView title = text(parentView, "UVC hardware controls  ▲", 13, true);
+        panel.addView(title, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout body = new LinearLayout(parentView.getContext());
+        body.setOrientation(LinearLayout.VERTICAL);
+        panel.addView(body, new LinearLayout.LayoutParams(-1, -2));
+
+        body.addView(text(parentView, "Stream mode", 11, false), new LinearLayout.LayoutParams(-1, -2));
+        Spinner streamSpinner = new Spinner(parentView.getContext());
+        streamSpinner.setEnabled(false);
+        body.addView(streamSpinner, new LinearLayout.LayoutParams(-1, -2));
+
+        Button startButton = new Button(parentView.getContext());
+        startButton.setAllCaps(false);
+        startButton.setText("Start selected stream");
+        startButton.setTextSize(12);
+        startButton.setEnabled(false);
+        body.addView(startButton, new LinearLayout.LayoutParams(-1, -2));
+
+        body.addView(disabledSlider(parentView, "Brightness"));
+        body.addView(disabledSlider(parentView, "Contrast"));
+        body.addView(disabledSlider(parentView, "Gain"));
+        body.addView(disabledSlider(parentView, "Exposure"));
+
+        CheckBox autoExposure = new CheckBox(parentView.getContext());
+        autoExposure.setText("Auto exposure");
+        autoExposure.setTextColor(Color.rgb(243, 245, 247));
+        autoExposure.setTextSize(12);
+        autoExposure.setEnabled(false);
+        body.addView(autoExposure, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView summary = text(parentView, "Open/query the UVC camera to list stream modes and controls.", 11, false);
+        summary.setTextColor(Color.rgb(180, 190, 203));
+        body.addView(summary, new LinearLayout.LayoutParams(-1, -2));
+        return panel;
+    }
+
+    private static LinearLayout disabledSlider(View parentView, String label) {
+        LinearLayout group = new LinearLayout(parentView.getContext());
+        group.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout row = new LinearLayout(parentView.getContext());
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(text(parentView, label, 11, false), new LinearLayout.LayoutParams(0, -2, 1.0f));
+        TextView value = text(parentView, "—", 11, false);
+        value.setGravity(Gravity.END);
+        row.addView(value, new LinearLayout.LayoutParams(0, -2, 1.0f));
+        group.addView(row, new LinearLayout.LayoutParams(-1, -2));
+
+        SeekBar seekBar = new SeekBar(parentView.getContext());
+        seekBar.setMax(100);
+        seekBar.setProgress(50);
+        seekBar.setEnabled(false);
+        group.addView(seekBar, new LinearLayout.LayoutParams(-1, -2));
+        return group;
+    }
+
+    private static boolean hasHardwareControlsPanel(LinearLayout cameraPanel) {
+        for (int i = 0; i < cameraPanel.getChildCount(); i++) {
+            if (HARDWARE_CONTROLS_TAG.equals(cameraPanel.getChildAt(i).getTag())) return true;
+        }
+        return false;
+    }
+
+    static void removeHardwareControlsPlaceholder(LinearLayout cameraPanel) {
+        for (int i = cameraPanel.getChildCount() - 1; i >= 0; i--) {
+            if (HARDWARE_CONTROLS_TAG.equals(cameraPanel.getChildAt(i).getTag())) cameraPanel.removeViewAt(i);
+        }
     }
 
     private static LinearLayout childLinearLayoutAt(LinearLayout parent, int index) {
@@ -151,6 +241,20 @@ public final class MainInterfaceOrganizer {
     private static String normalizedHeaderText(TextView textView) {
         String text = String.valueOf(textView.getText()).replace("▲", "").replace("▼", "").trim();
         return text.toUpperCase(Locale.US);
+    }
+
+    private static TextView text(View parentView, String text, int sizeSp, boolean bold) {
+        TextView textView = new TextView(parentView.getContext());
+        textView.setText(text);
+        textView.setTextSize(sizeSp);
+        textView.setTextColor(Color.rgb(243, 245, 247));
+        textView.setPadding(0, dp(parentView, 2), 0, dp(parentView, 2));
+        if (bold) textView.setTypeface(textView.getTypeface(), android.graphics.Typeface.BOLD);
+        return textView;
+    }
+
+    private static int dp(View view, int value) {
+        return Math.round(value * view.getContext().getResources().getDisplayMetrics().density);
     }
 
     private static boolean containsText(View view, String wantedText) {
