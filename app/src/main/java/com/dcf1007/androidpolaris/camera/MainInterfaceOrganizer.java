@@ -138,10 +138,14 @@ public final class MainInterfaceOrganizer {
             }
         });
 
-        body.addView(label(parentView, "Stream mode"), new LinearLayout.LayoutParams(-1, -2));
-        Spinner streamSpinner = new Spinner(parentView.getContext());
-        streamSpinner.setEnabled(false);
-        body.addView(streamSpinner, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(label(parentView, "Resolution"), new LinearLayout.LayoutParams(-1, -2));
+        Spinner resolutionSpinner = new Spinner(parentView.getContext());
+        resolutionSpinner.setEnabled(false);
+        body.addView(resolutionSpinner, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(label(parentView, "FPS"), new LinearLayout.LayoutParams(-1, -2));
+        Spinner fpsSpinner = new Spinner(parentView.getContext());
+        fpsSpinner.setEnabled(false);
+        body.addView(fpsSpinner, new LinearLayout.LayoutParams(-1, -2));
         body.addView(disabledButton(parentView, "Start selected stream"), new LinearLayout.LayoutParams(-1, -2));
         body.addView(disabledSlider(parentView, "Brightness"));
         body.addView(disabledSlider(parentView, "Contrast"));
@@ -175,9 +179,13 @@ public final class MainInterfaceOrganizer {
         LinearLayout row = new LinearLayout(parentView.getContext());
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.addView(label(parentView, labelText), new LinearLayout.LayoutParams(0, -2, 1.0f));
+        Button minus = disabledButton(parentView, "−");
         TextView value = label(parentView, "—");
-        value.setGravity(Gravity.END);
-        row.addView(value, new LinearLayout.LayoutParams(0, -2, 1.0f));
+        value.setGravity(Gravity.CENTER);
+        Button plus = disabledButton(parentView, "+");
+        row.addView(minus, new LinearLayout.LayoutParams(dp(parentView, 44), -2));
+        row.addView(value, new LinearLayout.LayoutParams(dp(parentView, 70), -2));
+        row.addView(plus, new LinearLayout.LayoutParams(dp(parentView, 44), -2));
         group.addView(row, new LinearLayout.LayoutParams(-1, -2));
 
         SeekBar seekBar = new SeekBar(parentView.getContext());
