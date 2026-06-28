@@ -16,20 +16,15 @@ import android.widget.TextView;
 
 import com.dcf1007.androidpolaris.camera.MainInterfaceOrganizer;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.Map;
-
 /**
  * Startup coordinator for the single-activity app.
  *
- * <p>MainActivity owns the visible UI and UVC controller. This class handles app-level USB attach
- * events and bridges Android's raw USB-device list into the UVC controller when a phone reports
- * attach/detach events but does not expose interface class 14 before USB permission is requested.</p>
+ * <p>MainActivity owns the visible UI and UVC controller. This class only normalizes the visible
+ * menu and triggers the normal Open/query button when Android reports USB attach/open events.
+ * It does not inject raw USB devices into the UVC backend.</p>
  */
 public final class PolarisApplication extends Application {
     private static final int AUTO_QUERY_MARKER_KEY = 0x706f6c61; // "pola"
-    private static final long QUERY_RETRY_DELAY_MS = 700L;
 
     private Activity currentMainActivity;
 
@@ -81,52 +76,11 @@ public final class PolarisApplication extends Application {
                 boolean alreadyQueried = Boolean.TRUE.equals(contentRoot.getTag(AUTO_QUERY_MARKER_KEY));
                 if ((forceQuery || !alreadyQueried) && hasAttachedUsbDevice(activity)) {
                     contentRoot.setTag(AUTO_QUERY_MARKER_KEY, Boolean.TRUE);
-                    triggerNormalOpenQueryPath(activity, contentRoot);
+                    View openQueryButton = findTextViewWithText(contentRoot, "Open/query USB UVC camera");
+                    if (openQueryButton != null) openQueryButton.performClick();
                 }
             }
         });
-    }
-
-    private static void triggerNormalOpenQueryPath(final Activity activity, final View contentRoot) {
-        View openQueryButton = findTextViewWithText(contentRoot, "Open/query USB UVC camera");
-        if (openQueryButton != null) openQueryButton.performClick();
-        contentRoot.postDelayed(new Runnable() {
-            @Override public void run() { injectRawUsbDevicesAndRetryQuery(activity, contentRoot); }
-        }, QUERY_RETRY_DELAY_MS);
-        contentRoot.postDelayed(new Runnable() {
-            @Override public void run() { injectRawUsbDevicesAndRetryQuery(activity, contentRoot); }
-        }, QUERY_RETRY_DELAY_MS * 2L);
-    }
-
-    /**
-     * Fallback for devices/phones where UsbManager lists a device but its UVC interface is not
-     * visible before permission. The controller still performs the real libuvc open/query.
-     */
-    @SuppressWarnings("unchecked")
-    private static void injectRawUsbDevicesAndRetryQuery(Activity activity, View contentRoot) {
-        try {
-            UsbManager usbManager = (UsbManager) activity.getSystemService(Context.USB_SERVICE);
-            if (usbManager == null || usbManager.getDeviceList().isEmpty()) return;
-
-            Field controllerField = MainActivity.class.getDeclaredField("uvcPreviewController");
-            controllerField.setAccessible(true);
-            Object controller = controllerField.get(activity);
-            if (controller == null) {
-                View openQueryButton = findTextViewWithText(contentRoot, "Open/query USB UVC camera");
-                if (openQueryButton != null) openQueryButton.performClick();
-                return;
-            }
-
-            Field detectedField = controller.getClass().getDeclaredField("detectedUvcDevicesById");
-            detectedField.setAccessible(true);
-            Map<Integer, UsbDevice> detected = (Map<Integer, UsbDevice>) detectedField.get(controller);
-            for (UsbDevice device : usbManager.getDeviceList().values()) detected.put(device.getDeviceId(), device);
-
-            Method requestMethod = controller.getClass().getMethod("requestPermissionAndOpenFirstCamera");
-            requestMethod.invoke(controller);
-        } catch (Throwable ignored) {
-            // The normal visible Open/query path remains available if this compatibility bridge fails.
-        }
     }
 
     private static boolean hasAttachedUsbDevice(Activity activity) {
