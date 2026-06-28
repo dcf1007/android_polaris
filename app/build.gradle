@@ -7,11 +7,11 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.dcf1007.androidpolaris'
+        applicationId 'com.dcf1007/androidpolaris'
         minSdk 23
         targetSdk 33
-        versionCode 43
-        versionName '0.2.41'
+        versionCode 44
+        versionName '0.2.42'
     }
 
     compileOptions {
