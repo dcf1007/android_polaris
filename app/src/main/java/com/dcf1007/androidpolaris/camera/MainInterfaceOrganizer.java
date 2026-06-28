@@ -13,8 +13,8 @@ import java.util.Locale;
  * Small UI organizer for the programmatic MainActivity layout.
  *
  * <p>MainActivity currently builds the interface directly in Java. This helper makes the existing
- * section headers collapsible and moves video-fit controls into the video-alignment section without
- * requiring a large rewrite of MainActivity in one commit.</p>
+ * section headers collapsible, moves video-fit controls into the video-alignment section, and
+ * updates camera wording to match the capability-query-first UVC lifecycle.</p>
  */
 final class MainInterfaceOrganizer {
     private static final String[] COLLAPSIBLE_SECTION_NAMES = {
@@ -26,6 +26,7 @@ final class MainInterfaceOrganizer {
     static void organize(View root) {
         LinearLayout controlsColumn = findControlsColumn(root);
         if (controlsColumn == null) return;
+        relabelOpenCameraButton(controlsColumn);
         moveVideoFitRowToAlignmentPanel(controlsColumn);
         installCollapsibleSectionHeaders(controlsColumn);
     }
@@ -56,6 +57,10 @@ final class MainInterfaceOrganizer {
             if (found != null) return found;
         }
         return null;
+    }
+
+    private static void relabelOpenCameraButton(LinearLayout controlsColumn) {
+        replaceText(controlsColumn, "Open USB UVC camera", "Open/query USB UVC camera");
     }
 
     private static void moveVideoFitRowToAlignmentPanel(LinearLayout controlsColumn) {
@@ -161,5 +166,15 @@ final class MainInterfaceOrganizer {
         ViewGroup group = (ViewGroup) view;
         for (int i = 0; i < group.getChildCount(); i++) if (containsCheckBoxText(group.getChildAt(i), wantedText)) return true;
         return false;
+    }
+
+    private static void replaceText(View view, String from, String to) {
+        if (view instanceof TextView && from.contentEquals(((TextView) view).getText())) {
+            ((TextView) view).setText(to);
+            return;
+        }
+        if (!(view instanceof ViewGroup)) return;
+        ViewGroup group = (ViewGroup) view;
+        for (int i = 0; i < group.getChildCount(); i++) replaceText(group.getChildAt(i), from, to);
     }
 }
