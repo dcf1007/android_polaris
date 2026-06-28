@@ -138,6 +138,10 @@ public final class MainInterfaceOrganizer {
             }
         });
 
+        body.addView(label(parentView, "Stream type"), new LinearLayout.LayoutParams(-1, -2));
+        Spinner streamTypeSpinner = new Spinner(parentView.getContext());
+        streamTypeSpinner.setEnabled(false);
+        body.addView(streamTypeSpinner, new LinearLayout.LayoutParams(-1, -2));
         body.addView(label(parentView, "Resolution"), new LinearLayout.LayoutParams(-1, -2));
         Spinner resolutionSpinner = new Spinner(parentView.getContext());
         resolutionSpinner.setEnabled(false);
