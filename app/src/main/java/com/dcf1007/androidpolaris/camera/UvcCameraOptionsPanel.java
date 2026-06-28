@@ -21,11 +21,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * UI binding for queried UVC capabilities.
+ * Live UI binding for queried UVC capabilities.
  *
- * <p>The panel is inserted into the existing camera panel under the USB buttons. It does not
- * open preview automatically. The user first selects a queried stream mode, then explicitly starts
- * or reapplies that stream. Reapplying closes and reopens the UVC backend through the controller.</p>
+ * <p>A disabled placeholder is visible from app startup. When the UVC backend is created, this
+ * panel replaces that placeholder and binds the controls to the actual camera lifecycle.</p>
  */
 final class UvcCameraOptionsPanel {
     private final Context context;
@@ -116,7 +115,10 @@ final class UvcCameraOptionsPanel {
         LinearLayout mainCameraPanel = MainInterfaceOrganizer.findFirstPanelInScrollableControls(activityContent);
         if (mainCameraPanel == null) return;
 
+        MainInterfaceOrganizer.removeHardwareControlsPlaceholder(mainCameraPanel);
+
         panel = new LinearLayout(context);
+        panel.setTag(MainInterfaceOrganizer.HARDWARE_CONTROLS_TAG);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(0, dp(8), 0, dp(8));
 
@@ -177,8 +179,6 @@ final class UvcCameraOptionsPanel {
         });
         body.addView(saveLogButton, new LinearLayout.LayoutParams(-1, -2));
 
-        // Camera panel children are: title, open/status row, stop button, then the rest.
-        // Insert here so hardware controls live under the buttons and above status text.
         int insertIndex = Math.min(3, mainCameraPanel.getChildCount());
         mainCameraPanel.addView(panel, insertIndex, new LinearLayout.LayoutParams(-1, -2));
         wireActions();
@@ -263,12 +263,8 @@ final class UvcCameraOptionsPanel {
         builder.append(capabilities.statusText == null ? "UVC status unavailable." : capabilities.statusText).append('\n');
         builder.append("Preview: ").append(capabilities.previewRunning ? "running" : "stopped").append('\n');
         builder.append("Stream modes: ").append(capabilities.streamModes.size()).append('\n');
-        if (capabilities.selectedStreamMode != null) {
-            builder.append("Selected: ").append(capabilities.selectedStreamMode.fullLabel()).append('\n');
-        }
-        if (capabilities.activeStreamMode != null) {
-            builder.append("Active: ").append(capabilities.activeStreamMode.fullLabel()).append('\n');
-        }
+        if (capabilities.selectedStreamMode != null) builder.append("Selected: ").append(capabilities.selectedStreamMode.fullLabel()).append('\n');
+        if (capabilities.activeStreamMode != null) builder.append("Active: ").append(capabilities.activeStreamMode.fullLabel()).append('\n');
         builder.append("Brightness: ").append(capabilities.brightnessSupported ? "available" : "not reported").append('\n');
         builder.append("Contrast: ").append(capabilities.contrastSupported ? "available" : "not reported").append('\n');
         builder.append("Gain: ").append(capabilities.gainSupported ? "available" : "not reported").append('\n');
@@ -285,12 +281,9 @@ final class UvcCameraOptionsPanel {
         return -1;
     }
 
-    private boolean sameModeList(List<UvcPreviewController.StreamMode> first,
-                                 List<UvcPreviewController.StreamMode> second) {
+    private boolean sameModeList(List<UvcPreviewController.StreamMode> first, List<UvcPreviewController.StreamMode> second) {
         if (first.size() != second.size()) return false;
-        for (int i = 0; i < first.size(); i++) {
-            if (!sameMode(first.get(i), second.get(i))) return false;
-        }
+        for (int i = 0; i < first.size(); i++) if (!sameMode(first.get(i), second.get(i))) return false;
         return true;
     }
 
@@ -304,9 +297,7 @@ final class UvcCameraOptionsPanel {
 
     private void updateCollapsedState() {
         if (panel == null) return;
-        for (int index = 1; index < panel.getChildCount(); index++) {
-            panel.getChildAt(index).setVisibility(collapsed ? View.GONE : View.VISIBLE);
-        }
+        for (int index = 1; index < panel.getChildCount(); index++) panel.getChildAt(index).setVisibility(collapsed ? View.GONE : View.VISIBLE);
         titleView.setText(collapsed ? "UVC hardware controls  ▼" : "UVC hardware controls  ▲");
     }
 
