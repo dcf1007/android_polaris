@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- USB Video Class devices: class 14 = video. This filter lets Android route
-         OTG UVC attach events to the app. Vendor/product-specific filters can be
-         added later for known cameras, but the generic video-class filter is the
-         safest starting point for astronomy cameras sold as standard UVC devices. -->
-    <usb-device class="14" />
+    <!--
+        Some Android devices do not expose the USB Video interface class before the
+        app has requested USB permission, even when the device is a UVC camera.
+        Use a broad attach filter so the app can launch, inspect the raw USB list,
+        request permission, and then let libuvc validate the camera.
+    -->
+    <usb-device />
 </resources>
