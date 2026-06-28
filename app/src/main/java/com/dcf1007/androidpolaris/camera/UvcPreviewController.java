@@ -46,6 +46,7 @@ public final class UvcPreviewController {
     private static final int STREAM_TYPE_YUYV = 4;
     private static final int STREAM_TYPE_MJPEG = 6;
     private static final int FALLBACK_FPS = 30;
+    private static final int[] FPS_PROBE_CANDIDATES = {120, 100, 60, 50, 30, 25, 20, 15, 10, 5, 1};
     private static final long PREVIEW_SURFACE_RETRY_DELAY_MS = 250L;
     private static final float DEFAULT_PREVIEW_ASPECT_RATIO = 4.0f / 3.0f;
     private static final int MAX_DEBUG_LOG_CHARS = 24000;
@@ -225,7 +226,6 @@ public final class UvcPreviewController {
         return !detectedUvcDevicesById.isEmpty();
     }
 
-    /** Requests USB permission for the first raw USB candidate; libuvc validates whether it is UVC. */
     public void requestPermissionAndOpenFirstCamera() {
         if (!register()) return;
         refreshDetectedUsbDeviceCache();
@@ -471,28 +471,69 @@ public final class UvcPreviewController {
     }
 
     private List<StreamMode> queryStreamModes(UVCCamera camera, String sizeJson) {
+        List<StreamMode> baseModes = queryBaseStreamModes(camera, sizeJson);
+        List<StreamMode> probedModes = probeExactFpsModes(camera, baseModes);
+        if (!probedModes.isEmpty()) {
+            notifyStatus("Exact FPS probe found " + probedModes.size() + " stream mode(s) from " + baseModes.size() + " base resolution/format entries.");
+            return probedModes;
+        }
+        notifyStatus("Exact FPS probe found no modes; using libuvc base sizes with fallback FPS.");
+        return baseModes;
+    }
+
+    private List<StreamMode> queryBaseStreamModes(UVCCamera camera, String sizeJson) {
         List<StreamMode> modes = new ArrayList<>();
-        appendModesForFormat(modes, camera, sizeJson, UVCCamera.FRAME_FORMAT_YUYV);
-        appendModesForFormat(modes, camera, sizeJson, UVCCamera.FRAME_FORMAT_MJPEG);
+        appendBaseModesForFormat(modes, camera, sizeJson, UVCCamera.FRAME_FORMAT_YUYV);
+        appendBaseModesForFormat(modes, camera, sizeJson, UVCCamera.FRAME_FORMAT_MJPEG);
         return modes;
     }
 
-    private void appendModesForFormat(List<StreamMode> modes, UVCCamera camera, String sizeJson, int frameFormat) {
+    private void appendBaseModesForFormat(List<StreamMode> modes, UVCCamera camera, String sizeJson, int frameFormat) {
         List<Size> sizes = getSizesForFormat(camera, sizeJson, frameFormat);
         if (sizes == null) return;
-        for (Size size : sizes) for (Integer fps : fpsValuesForSize(size)) modes.add(new StreamMode(frameFormat, size.width, size.height, fps));
+        for (Size size : sizes) addUniqueStreamMode(modes, new StreamMode(frameFormat, size.width, size.height, FALLBACK_FPS));
     }
 
-    private List<Integer> fpsValuesForSize(Size size) {
-        List<Integer> values = new ArrayList<>();
-        if (size != null && size.fps != null) {
-            for (float rawFps : size.fps) {
-                int rounded = Math.round(rawFps);
-                if (rounded > 0 && !values.contains(rounded)) values.add(rounded);
+    private List<StreamMode> probeExactFpsModes(UVCCamera camera, List<StreamMode> baseModes) {
+        List<StreamMode> modes = new ArrayList<>();
+        if (camera == null || baseModes.isEmpty()) return modes;
+        for (StreamMode baseMode : baseModes) {
+            for (int fps : FPS_PROBE_CANDIDATES) {
+                if (isExactModeAcceptedByLibuvc(camera, baseMode, fps, baseModes)) {
+                    addUniqueStreamMode(modes, new StreamMode(baseMode.frameFormat, baseMode.width, baseMode.height, fps));
+                }
             }
         }
-        if (values.isEmpty()) values.add(FALLBACK_FPS);
-        return values;
+        return modes;
+    }
+
+    private boolean isExactModeAcceptedByLibuvc(UVCCamera camera, StreamMode baseMode, int fps, List<StreamMode> baseModes) {
+        StreamMode separator = findProbeSeparator(baseMode, baseModes);
+        if (separator != null) {
+            try {
+                camera.setPreviewSize(separator.width, separator.height, separator.fps, separator.fps,
+                        separator.frameFormat, UVCCamera.DEFAULT_BANDWIDTH);
+            } catch (Throwable ignored) { }
+        }
+        try {
+            camera.setPreviewSize(baseMode.width, baseMode.height, fps, fps,
+                    baseMode.frameFormat, UVCCamera.DEFAULT_BANDWIDTH);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private StreamMode findProbeSeparator(StreamMode target, List<StreamMode> baseModes) {
+        for (StreamMode candidate : baseModes) {
+            if (candidate.width != target.width || candidate.height != target.height || candidate.frameFormat != target.frameFormat) return candidate;
+        }
+        return null;
+    }
+
+    private void addUniqueStreamMode(List<StreamMode> modes, StreamMode candidate) {
+        for (StreamMode mode : modes) if (sameStreamMode(mode, candidate)) return;
+        modes.add(candidate);
     }
 
     private List<Size> getSizesForFormat(UVCCamera camera, String sizeJson, int frameFormat) {
@@ -725,7 +766,7 @@ public final class UvcPreviewController {
         StringBuilder builder = new StringBuilder("Stream modes:");
         int shown = 0;
         for (StreamMode mode : availableStreamModes) {
-            if (shown >= 24) { builder.append("\n  …"); break; }
+            if (shown >= 48) { builder.append("\n  …"); break; }
             builder.append("\n  • ").append(mode.fullLabel());
             shown++;
         }
