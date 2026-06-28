@@ -1,17 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- libuvc checks CAMERA permission on modern Android before opening
-         the native USB-camera preview, even though no built-in Camera2 camera is used. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- The app is designed for USB OTG / UVC cameras. Keep required=false so the
-         APK remains installable while the UI can report missing USB-host support. -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
+        android:name=".PolarisApplication"
         android:theme="@style/AppTheme"
         android:label="@string/app_name"
         android:allowBackup="true"
@@ -24,9 +21,6 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
-            <!-- Launch the app when a USB camera is attached. The UVC backend then
-                 requests Android USB permission and opens preview through libuvc. -->
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
