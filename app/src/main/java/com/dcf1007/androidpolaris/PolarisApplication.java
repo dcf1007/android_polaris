@@ -12,8 +12,6 @@ import android.hardware.usb.UsbManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
-import android.view.ViewGroup;
-import android.widget.TextView;
 
 import com.dcf1007.androidpolaris.camera.MainInterfaceOrganizer;
 
@@ -23,9 +21,9 @@ import java.util.Locale;
 /**
  * Startup coordinator for the single-activity app.
  *
- * <p>MainActivity owns the UI and UVC controller. This class only normalizes the menu and triggers
- * the normal Open/query button when Android reports a raw USB device. The UVC backend then requests
- * permission and lets libuvc validate whether that raw device is a camera.</p>
+ * <p>MainActivity owns the UI and UVC controller. This class normalizes the menu and triggers the
+ * same camera-query path automatically when Android reports a raw USB device at app start or attach.
+ * It does not require a visible manual Open/query button.</p>
  */
 public final class PolarisApplication extends Application {
     private static final int USB_VIDEO_CLASS = 14;
@@ -86,11 +84,20 @@ public final class PolarisApplication extends Application {
                     contentRoot.setTag(AUTO_QUERY_MARKER_KEY, Boolean.TRUE);
                     reportToMainActivity(activity, "Raw USB device detected. Passing candidate to libuvc query path.\n"
                             + describeRawUsbDevices(usbManager));
-                    View openQueryButton = findTextViewWithText(contentRoot, "Open/query USB UVC camera");
-                    if (openQueryButton != null) openQueryButton.performClick();
+                    triggerAutomaticCameraQuery(activity);
                 }
             }
         });
+    }
+
+    private static void triggerAutomaticCameraQuery(Activity activity) {
+        try {
+            Method requestMethod = MainActivity.class.getDeclaredMethod("requestCameraPermissionThenOpenUvc");
+            requestMethod.setAccessible(true);
+            requestMethod.invoke(activity);
+        } catch (Throwable throwable) {
+            reportToMainActivity(activity, "Automatic UVC query failed to start: " + throwable.getClass().getSimpleName() + ".");
+        }
     }
 
     private static String describeRawUsbDevices(UsbManager usbManager) {
@@ -132,16 +139,5 @@ public final class PolarisApplication extends Application {
             appendDebugLog.setAccessible(true);
             appendDebugLog.invoke(activity, message);
         } catch (Throwable ignored) { }
-    }
-
-    private static View findTextViewWithText(View view, String text) {
-        if (view instanceof TextView && text.contentEquals(((TextView) view).getText())) return view;
-        if (!(view instanceof ViewGroup)) return null;
-        ViewGroup group = (ViewGroup) view;
-        for (int index = 0; index < group.getChildCount(); index++) {
-            View found = findTextViewWithText(group.getChildAt(index), text);
-            if (found != null) return found;
-        }
-        return null;
     }
 }
