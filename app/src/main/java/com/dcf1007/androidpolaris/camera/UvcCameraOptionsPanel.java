@@ -23,6 +23,7 @@ import java.util.List;
 /** Binds queried UVC capabilities to the visible hardware-controls section. */
 final class UvcCameraOptionsPanel {
     private static final int FINE_STEP_PERCENT = 1;
+    private static final String STREAM_BUTTON_ROW_TAG = "android-polaris-primary-stream-buttons";
 
     private final Context context;
     private final UvcPreviewController controller;
@@ -116,10 +117,10 @@ final class UvcCameraOptionsPanel {
         streamTypeSpinner.setEnabled(streamSelectionEnabled);
         resolutionSpinner.setEnabled(streamSelectionEnabled && !resolutionOptions.isEmpty());
         fpsSpinner.setEnabled(streamSelectionEnabled && !fpsOptions.isEmpty());
-        startStreamButton.setEnabled(streamSelectionEnabled && selectedModeFromDropdowns() != null);
-        startStreamButton.setText(capabilities.previewRunning
-                ? "Preview running — stop camera to change stream"
-                : "Start selected stream");
+        if (startStreamButton != null) {
+            startStreamButton.setEnabled(streamSelectionEnabled && selectedModeFromDropdowns() != null);
+            startStreamButton.setText("Start selected stream");
+        }
 
         brightnessSlider.setEnabled(capabilities.cameraOpen && capabilities.brightnessSupported);
         contrastSlider.setEnabled(capabilities.cameraOpen && capabilities.contrastSupported);
@@ -139,6 +140,7 @@ final class UvcCameraOptionsPanel {
         LinearLayout cameraPanel = MainInterfaceOrganizer.findFirstPanelInScrollableControls(root);
         if (cameraPanel == null) return;
         removeTaggedHardwarePanels(cameraPanel);
+        installPrimaryStreamButtonRow(cameraPanel);
 
         panel = new LinearLayout(context);
         panel.setTag(MainInterfaceOrganizer.HARDWARE_CONTROLS_TAG);
@@ -174,11 +176,6 @@ final class UvcCameraOptionsPanel {
         fpsSpinner.setEnabled(false);
         body.addView(fpsSpinner, new LinearLayout.LayoutParams(-1, -2));
 
-        startStreamButton = button("Start selected stream", false, new View.OnClickListener() {
-            @Override public void onClick(View view) { controller.startSelectedStream(); }
-        });
-        body.addView(startStreamButton, new LinearLayout.LayoutParams(-1, -2));
-
         brightnessSlider = addFineSlider(body, "Brightness");
         contrastSlider = addFineSlider(body, "Contrast");
         gainSlider = addFineSlider(body, "Gain");
@@ -189,7 +186,7 @@ final class UvcCameraOptionsPanel {
         autoExposureCheckBox.setTextSize(12);
         autoExposureCheckBox.setEnabled(false);
         body.addView(autoExposureCheckBox, new LinearLayout.LayoutParams(-1, -2));
-        summaryView = text("Open/query the UVC camera to list stream modes and controls.", 11, false);
+        summaryView = text("Automatic USB query lists stream modes and hardware controls after a camera is connected.", 11, false);
         summaryView.setTextColor(Color.rgb(180, 190, 203));
         body.addView(summaryView, new LinearLayout.LayoutParams(-1, -2));
         body.addView(button("Save UVC log to Downloads", true, new View.OnClickListener() {
@@ -199,6 +196,31 @@ final class UvcCameraOptionsPanel {
         cameraPanel.addView(panel, Math.min(3, cameraPanel.getChildCount()), new LinearLayout.LayoutParams(-1, -2));
         wireActions();
         updateValueLabels();
+    }
+
+    private void installPrimaryStreamButtonRow(LinearLayout cameraPanel) {
+        removeTaggedRows(cameraPanel, STREAM_BUTTON_ROW_TAG);
+        View stopButton = findDirectChildWithText(cameraPanel, "Stop camera");
+        if (stopButton == null) {
+            startStreamButton = button("Start selected stream", false, new View.OnClickListener() {
+                @Override public void onClick(View view) { controller.startSelectedStream(); }
+            });
+            return;
+        }
+
+        int stopIndex = cameraPanel.indexOfChild(stopButton);
+        cameraPanel.removeView(stopButton);
+
+        LinearLayout row = new LinearLayout(context);
+        row.setTag(STREAM_BUTTON_ROW_TAG);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, 0, 0, dp(6));
+        startStreamButton = button("Start selected stream", false, new View.OnClickListener() {
+            @Override public void onClick(View view) { controller.startSelectedStream(); }
+        });
+        row.addView(startStreamButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
+        row.addView(stopButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
+        cameraPanel.addView(row, Math.max(0, stopIndex), new LinearLayout.LayoutParams(-1, -2));
     }
 
     private void wireActions() {
@@ -426,6 +448,28 @@ final class UvcCameraOptionsPanel {
         for (int i = cameraPanel.getChildCount() - 1; i >= 0; i--) {
             if (MainInterfaceOrganizer.HARDWARE_CONTROLS_TAG.equals(cameraPanel.getChildAt(i).getTag())) cameraPanel.removeViewAt(i);
         }
+    }
+
+    private void removeTaggedRows(LinearLayout panel, String tag) {
+        for (int i = panel.getChildCount() - 1; i >= 0; i--) {
+            if (tag.equals(panel.getChildAt(i).getTag())) panel.removeViewAt(i);
+        }
+    }
+
+    private View findDirectChildWithText(LinearLayout panel, String wantedText) {
+        for (int i = 0; i < panel.getChildCount(); i++) {
+            View child = panel.getChildAt(i);
+            if (containsText(child, wantedText)) return child;
+        }
+        return null;
+    }
+
+    private boolean containsText(View view, String wantedText) {
+        if (view instanceof TextView && wantedText.contentEquals(((TextView) view).getText())) return true;
+        if (!(view instanceof ViewGroup)) return false;
+        ViewGroup group = (ViewGroup) view;
+        for (int i = 0; i < group.getChildCount(); i++) if (containsText(group.getChildAt(i), wantedText)) return true;
+        return false;
     }
 
     private boolean sameModeList(List<UvcPreviewController.StreamMode> first, List<UvcPreviewController.StreamMode> second) {
