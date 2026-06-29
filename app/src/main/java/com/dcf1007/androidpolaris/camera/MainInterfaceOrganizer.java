@@ -20,10 +20,9 @@ import java.util.Locale;
  * Startup UI normalizer for MainActivity's programmatic layout.
  *
  * <p>MainActivity still owns the screen layout. This class performs one explicit, readable pass over
- * that layout after creation: it standardizes typography, moves the video-fit row to the video
- * alignment section, creates the disabled UVC hardware section that must be visible before query,
- * enables consistent collapsible category headers, and removes visible text that no longer matches
- * the current direct-libuvc/query-first behavior.</p>
+ * that layout after creation: it standardizes typography, removes obsolete manual USB controls,
+ * moves the video-fit row to the video alignment section, creates the disabled UVC hardware section
+ * that is visible before query, and enables consistent collapsible category headers.</p>
  */
 public final class MainInterfaceOrganizer {
     static final String HARDWARE_CONTROLS_TAG = "android-polaris-uvc-hardware-controls";
@@ -46,7 +45,7 @@ public final class MainInterfaceOrganizer {
         if (controlsColumn == null) return;
 
         replaceObsoleteVisibleText(root);
-        relabelOpenCameraButton(controlsColumn);
+        removeObsoleteManualUsbControls(controlsColumn);
         moveVideoFitRowToAlignmentPanel(controlsColumn);
         ensureDisabledHardwareControlsAreVisible(controlsColumn);
         installConsistentCollapsibleHeaders(controlsColumn);
@@ -85,17 +84,23 @@ public final class MainInterfaceOrganizer {
     private static void replaceObsoleteVisibleText(View root) {
         replaceText(root,
                 "Open the USB OTG UVC camera, then use the alignment controls to match the video to the reticle. The reticle is native Canvas geometry generated from the full drawing.",
-                "Open/query the USB UVC camera, select a stream mode, then start preview. Use video alignment controls to match the preview to the native reticle.");
+                "Connect the USB UVC camera, select a stream mode, then start preview. Use video alignment controls to match the preview to the native reticle.");
+        replaceText(root,
+                "Open/query the USB UVC camera, select a stream mode, then start preview. Use video alignment controls to match the preview to the native reticle.",
+                "Connect the USB UVC camera, select a stream mode, then start preview. Use video alignment controls to match the preview to the native reticle.");
         replaceText(root,
                 "Native Android build. USB/UVC preview uses the AUSBC backend; the reticle is native Canvas geometry. No SVG, WebView or Camera2 preview path is used.",
                 "Native Android build. USB/UVC preview uses direct libuvc. The reticle is native Canvas geometry. No WebView, SVG runtime, or Camera2 preview path is used.");
-        replaceText(root, "Open USB UVC camera", "Open/query USB UVC camera");
-        replaceText(root, "Press Open USB UVC camera to load the UVC backend and request USB permission.",
-                "Open/query the UVC camera to list stream modes and hardware controls.");
     }
 
-    private static void relabelOpenCameraButton(LinearLayout controlsColumn) {
-        replaceText(controlsColumn, "Open USB UVC camera", "Open/query USB UVC camera");
+    private static void removeObsoleteManualUsbControls(LinearLayout controlsColumn) {
+        LinearLayout cameraPanel = childLinearLayoutAt(controlsColumn, 0);
+        if (cameraPanel == null) return;
+        removeDirectChildContainingText(cameraPanel, "Open USB UVC camera");
+        removeDirectChildContainingText(cameraPanel, "Open/query USB UVC camera");
+        removeDirectChildContainingText(cameraPanel, "USB status");
+        removeDirectChildContainingText(cameraPanel, "UVC status: not scanned.");
+        removeDirectChildContainingText(cameraPanel, "No raw USB UVC devices detected");
     }
 
     private static void moveVideoFitRowToAlignmentPanel(LinearLayout controlsColumn) {
@@ -150,7 +155,6 @@ public final class MainInterfaceOrganizer {
         Spinner fpsSpinner = new Spinner(parentView.getContext());
         fpsSpinner.setEnabled(false);
         body.addView(fpsSpinner, new LinearLayout.LayoutParams(-1, -2));
-        body.addView(disabledButton(parentView, "Start selected stream"), new LinearLayout.LayoutParams(-1, -2));
         body.addView(disabledSlider(parentView, "Brightness"));
         body.addView(disabledSlider(parentView, "Contrast"));
         body.addView(disabledSlider(parentView, "Gain"));
@@ -161,7 +165,7 @@ public final class MainInterfaceOrganizer {
         autoExposure.setEnabled(false);
         body.addView(autoExposure, new LinearLayout.LayoutParams(-1, -2));
 
-        TextView summary = label(parentView, "Open/query the UVC camera to list stream modes and hardware controls.");
+        TextView summary = label(parentView, "Automatic USB query will list stream modes and hardware controls after the camera is connected.");
         summary.setTextColor(COLOR_MUTED);
         body.addView(summary, new LinearLayout.LayoutParams(-1, -2));
         return panel;
@@ -289,6 +293,12 @@ public final class MainInterfaceOrganizer {
                     && containsCheckBoxText(child, "Lock width/height")) return child;
         }
         return null;
+    }
+
+    private static void removeDirectChildContainingText(LinearLayout panel, String wantedText) {
+        for (int index = panel.getChildCount() - 1; index >= 0; index--) {
+            if (containsText(panel.getChildAt(index), wantedText)) panel.removeViewAt(index);
+        }
     }
 
     private static int findHeaderIndex(LinearLayout panel, String normalizedTitle) {
