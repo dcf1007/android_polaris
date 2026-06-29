@@ -2,6 +2,7 @@ package com.dcf1007.androidpolaris.camera;
 
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -20,21 +21,25 @@ import java.util.Locale;
  * Startup UI normalizer for MainActivity's programmatic layout.
  *
  * <p>MainActivity still owns the screen layout. This class performs one explicit, readable pass over
- * that layout after creation: it standardizes typography, removes obsolete manual USB controls,
- * moves the video-fit row to the video alignment section, creates the disabled UVC hardware section
- * that is visible before query, and enables consistent collapsible category headers.</p>
+ * that layout after creation: it standardizes typography, removes obsolete manual USB controls and
+ * redundant status copy, moves the video-fit row to the video alignment section, creates the disabled
+ * UVC hardware section that is visible before query, and enables consistent collapsible category
+ * headers.</p>
  */
 public final class MainInterfaceOrganizer {
     static final String HARDWARE_CONTROLS_TAG = "android-polaris-uvc-hardware-controls";
 
     private static final int COLOR_TEXT = Color.rgb(243, 245, 247);
     private static final int COLOR_MUTED = Color.rgb(174, 182, 194);
+    private static final int COLOR_BORDER = Color.rgb(52, 58, 70);
+    private static final int COLOR_ACCENT = Color.rgb(134, 183, 255);
+    private static final int COLOR_ACCENT_TEXT = Color.rgb(6, 16, 31);
     private static final int HEADER_SIZE_SP = 13;
     private static final int BODY_SIZE_SP = 12;
     private static final int SMALL_SIZE_SP = 11;
 
     private static final String[] COLLAPSIBLE_HEADER_TITLES = {
-            "ALIGNMENT", "VISIBILITY", "POLARIS ALIGNMENT", "STATUS", "READOUTS", "DEBUG LOG"
+            "ALIGNMENT", "VISIBILITY", "POLARIS ALIGNMENT", "READOUTS", "DEBUG LOG"
     };
 
     private MainInterfaceOrganizer() { }
@@ -46,10 +51,12 @@ public final class MainInterfaceOrganizer {
 
         replaceObsoleteVisibleText(root);
         removeObsoleteManualUsbControls(controlsColumn);
+        removeRedundantStatusSection(controlsColumn);
         moveVideoFitRowToAlignmentPanel(controlsColumn);
         ensureDisabledHardwareControlsAreVisible(controlsColumn);
         installConsistentCollapsibleHeaders(controlsColumn);
         standardizeTypography(root);
+        stylePrimaryStartButtons(root);
     }
 
     /** Returns the camera panel used by the live UVC controls. */
@@ -101,6 +108,23 @@ public final class MainInterfaceOrganizer {
         removeDirectChildContainingText(cameraPanel, "USB status");
         removeDirectChildContainingText(cameraPanel, "UVC status: not scanned.");
         removeDirectChildContainingText(cameraPanel, "No raw USB UVC devices detected");
+    }
+
+    /** Removes the static Alignment Status section while preserving Readouts and Debug log. */
+    private static void removeRedundantStatusSection(LinearLayout controlsColumn) {
+        LinearLayout statusPanel = childLinearLayoutAt(controlsColumn, 3);
+        if (statusPanel == null) return;
+        int statusHeaderIndex = findHeaderIndex(statusPanel, "STATUS");
+        if (statusHeaderIndex < 0) return;
+        int removeUntilExclusive = statusPanel.getChildCount();
+        for (int index = statusHeaderIndex + 1; index < statusPanel.getChildCount(); index++) {
+            View child = statusPanel.getChildAt(index);
+            if (child instanceof TextView && isCollapsibleHeader(normalizedHeaderText((TextView) child))) {
+                removeUntilExclusive = index;
+                break;
+            }
+        }
+        for (int index = removeUntilExclusive - 1; index >= statusHeaderIndex; index--) statusPanel.removeViewAt(index);
     }
 
     private static void moveVideoFitRowToAlignmentPanel(LinearLayout controlsColumn) {
@@ -266,12 +290,37 @@ public final class MainInterfaceOrganizer {
         for (int index = 0; index < group.getChildCount(); index++) standardizeTypography(group.getChildAt(index));
     }
 
+    private static void stylePrimaryStartButtons(View view) {
+        if (view instanceof Button && "Start selected stream".contentEquals(((Button) view).getText())) {
+            Button button = (Button) view;
+            button.setAllCaps(false);
+            button.setTextSize(15);
+            button.setTextColor(COLOR_ACCENT_TEXT);
+            button.setGravity(Gravity.CENTER);
+            button.setMinHeight(dp(button, 42));
+            button.setPadding(dp(button, 10), dp(button, 8), dp(button, 10), dp(button, 8));
+            button.setBackground(roundedBackground(button, COLOR_ACCENT, Color.TRANSPARENT, 10));
+        }
+        if (!(view instanceof ViewGroup)) return;
+        ViewGroup group = (ViewGroup) view;
+        for (int index = 0; index < group.getChildCount(); index++) stylePrimaryStartButtons(group.getChildAt(index));
+    }
+
     private static void applyHeaderStyle(TextView textView, CharSequence text) {
         textView.setText(text);
         textView.setTextSize(HEADER_SIZE_SP);
         textView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         textView.setTextColor(COLOR_TEXT);
         textView.setPadding(0, dp(textView, 4), 0, dp(textView, 4));
+    }
+
+    private static GradientDrawable roundedBackground(View view, int fillColor, int strokeColor, int cornerDp) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        drawable.setColor(fillColor);
+        drawable.setCornerRadius(dp(view, cornerDp));
+        if (strokeColor != Color.TRANSPARENT) drawable.setStroke(dp(view, 1), strokeColor);
+        return drawable;
     }
 
     private static boolean isCollapsibleHeader(String title) {
