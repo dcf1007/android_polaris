@@ -3,6 +3,7 @@ package com.dcf1007.androidpolaris.camera;
 import android.app.Activity;
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -24,6 +25,8 @@ import java.util.List;
 final class UvcCameraOptionsPanel {
     private static final int FINE_STEP_PERCENT = 1;
     private static final String STREAM_BUTTON_ROW_TAG = "android-polaris-primary-stream-buttons";
+    private static final int COLOR_PRIMARY = Color.rgb(134, 183, 255);
+    private static final int COLOR_PRIMARY_TEXT = Color.rgb(6, 16, 31);
 
     private final Context context;
     private final UvcPreviewController controller;
@@ -119,7 +122,8 @@ final class UvcCameraOptionsPanel {
         fpsSpinner.setEnabled(streamSelectionEnabled && !fpsOptions.isEmpty());
         if (startStreamButton != null) {
             startStreamButton.setEnabled(streamSelectionEnabled && selectedModeFromDropdowns() != null);
-            startStreamButton.setText("Start selected stream");
+            startStreamButton.setText("Start stream");
+            stylePrimaryButton(startStreamButton);
         }
 
         brightnessSlider.setEnabled(capabilities.cameraOpen && capabilities.brightnessSupported);
@@ -203,11 +207,13 @@ final class UvcCameraOptionsPanel {
 
     private void installPrimaryStreamButtonRow(LinearLayout cameraPanel) {
         removeTaggedRows(cameraPanel, STREAM_BUTTON_ROW_TAG);
-        View stopButton = findDirectChildWithText(cameraPanel, "Stop camera");
+        View stopButton = findDirectChildWithText(cameraPanel, "Stop stream");
+        if (stopButton == null) stopButton = findDirectChildWithText(cameraPanel, "Stop camera");
         if (stopButton == null) {
-            startStreamButton = button("Start selected stream", false, new View.OnClickListener() {
+            startStreamButton = button("Start stream", false, new View.OnClickListener() {
                 @Override public void onClick(View view) { controller.startSelectedStream(); }
             });
+            stylePrimaryButton(startStreamButton);
             return;
         }
 
@@ -218,9 +224,18 @@ final class UvcCameraOptionsPanel {
         row.setTag(STREAM_BUTTON_ROW_TAG);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, 0, 0, dp(6));
-        startStreamButton = button("Start selected stream", false, new View.OnClickListener() {
+        startStreamButton = button("Start stream", false, new View.OnClickListener() {
             @Override public void onClick(View view) { controller.startSelectedStream(); }
         });
+        stylePrimaryButton(startStreamButton);
+        if (stopButton instanceof Button) {
+            Button button = (Button) stopButton;
+            button.setText("Stop stream");
+            button.setAllCaps(false);
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { controller.stopStream(); }
+            });
+        }
         row.addView(startStreamButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
         row.addView(stopButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
         cameraPanel.addView(row, Math.max(0, stopIndex), new LinearLayout.LayoutParams(-1, -2));
@@ -493,6 +508,20 @@ final class UvcCameraOptionsPanel {
         button.setEnabled(enabled);
         if (listener != null) button.setOnClickListener(listener);
         return button;
+    }
+
+    private void stylePrimaryButton(Button button) {
+        button.setAllCaps(false);
+        button.setTextSize(15);
+        button.setTextColor(COLOR_PRIMARY_TEXT);
+        button.setGravity(Gravity.CENTER);
+        button.setMinHeight(dp(42));
+        button.setPadding(dp(10), dp(8), dp(10), dp(8));
+        GradientDrawable background = new GradientDrawable();
+        background.setShape(GradientDrawable.RECTANGLE);
+        background.setColor(COLOR_PRIMARY);
+        background.setCornerRadius(dp(10));
+        button.setBackground(background);
     }
 
     private TextView text(String text, int sizeSp, boolean bold) {
