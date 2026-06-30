@@ -56,7 +56,7 @@ public final class MainInterfaceOrganizer {
         ensureDisabledHardwareControlsAreVisible(controlsColumn);
         installConsistentCollapsibleHeaders(controlsColumn);
         standardizeTypography(root);
-        stylePrimaryStartButtons(root);
+        stylePrimaryStreamButtons(root);
     }
 
     /** Returns the camera panel used by the live UVC controls. */
@@ -106,6 +106,8 @@ public final class MainInterfaceOrganizer {
         removeDirectChildContainingText(cameraPanel, "Open USB UVC camera");
         removeDirectChildContainingText(cameraPanel, "Open/query USB UVC camera");
         removeDirectChildContainingText(cameraPanel, "USB status");
+        removeDirectChildContainingText(cameraPanel, "Stop camera");
+        removeDirectChildContainingText(cameraPanel, "Start selected stream");
         removeDirectChildContainingText(cameraPanel, "UVC status: not scanned.");
         removeDirectChildContainingText(cameraPanel, "No raw USB UVC devices detected");
     }
@@ -290,8 +292,8 @@ public final class MainInterfaceOrganizer {
         for (int index = 0; index < group.getChildCount(); index++) standardizeTypography(group.getChildAt(index));
     }
 
-    private static void stylePrimaryStartButtons(View view) {
-        if (view instanceof Button && "Start selected stream".contentEquals(((Button) view).getText())) {
+    private static void stylePrimaryStreamButtons(View view) {
+        if (view instanceof Button && isPrimaryStreamButtonText(((Button) view).getText())) {
             Button button = (Button) view;
             button.setAllCaps(false);
             button.setTextSize(15);
@@ -303,7 +305,13 @@ public final class MainInterfaceOrganizer {
         }
         if (!(view instanceof ViewGroup)) return;
         ViewGroup group = (ViewGroup) view;
-        for (int index = 0; index < group.getChildCount(); index++) stylePrimaryStartButtons(group.getChildAt(index));
+        for (int index = 0; index < group.getChildCount(); index++) stylePrimaryStreamButtons(group.getChildAt(index));
+    }
+
+    private static boolean isPrimaryStreamButtonText(CharSequence text) {
+        return "Start stream".contentEquals(text)
+                || "Stop stream".contentEquals(text)
+                || "Refresh USB devices".contentEquals(text);
     }
 
     private static void applyHeaderStyle(TextView textView, CharSequence text) {
