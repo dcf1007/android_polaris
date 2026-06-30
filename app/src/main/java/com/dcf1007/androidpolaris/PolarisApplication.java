@@ -26,15 +26,18 @@ import java.util.Locale;
 /**
  * Startup coordinator for the single-activity app.
  *
- * <p>MainActivity owns the UI and UVC controller. This class normalizes the menu and triggers the
- * same camera-query path automatically when Android reports a raw USB device at app start or attach.
- * It does not require a visible manual Open/query button.</p>
+ * <p>MainActivity owns the UI and UVC controller. This class normalizes the menu, makes the UVC
+ * stream controls available immediately at app load, and triggers the same camera-query path
+ * automatically when Android reports a raw USB device at app start or attach. It does not require a
+ * visible manual Open/query button.</p>
  */
 public final class PolarisApplication extends Application {
     private static final int USB_VIDEO_CLASS = 14;
     private static final int AUTO_QUERY_MARKER_KEY = 0x706f6c61; // "pola"
     private static final int COLOR_STREAM_BUTTON = Color.rgb(134, 183, 255);
     private static final int COLOR_STREAM_BUTTON_TEXT = Color.rgb(6, 16, 31);
+    private static final int COLOR_DISABLED_BUTTON = Color.rgb(58, 63, 73);
+    private static final int COLOR_DISABLED_BUTTON_TEXT = Color.rgb(154, 163, 176);
 
     private Activity currentMainActivity;
 
@@ -82,6 +85,7 @@ public final class PolarisApplication extends Application {
         if (contentRoot == null) return;
         contentRoot.post(new Runnable() {
             @Override public void run() {
+                ensureUvcController(activity);
                 MainInterfaceOrganizer.organize(contentRoot);
                 sanitizeVisibleStreamControls(contentRoot);
                 UsbManager usbManager = (UsbManager) activity.getSystemService(Context.USB_SERVICE);
@@ -96,6 +100,17 @@ public final class PolarisApplication extends Application {
                 }
             }
         });
+    }
+
+    /** Initializes the UVC controller/panel without requesting USB permission or starting preview. */
+    private static void ensureUvcController(Activity activity) {
+        try {
+            Method ensureMethod = MainActivity.class.getDeclaredMethod("ensureUvcPreviewController");
+            ensureMethod.setAccessible(true);
+            ensureMethod.invoke(activity);
+        } catch (Throwable throwable) {
+            reportToMainActivity(activity, "UVC controls failed to initialize: " + throwable.getClass().getSimpleName() + ".");
+        }
     }
 
     /**
@@ -147,15 +162,16 @@ public final class PolarisApplication extends Application {
     }
 
     private static void applyPrimaryStreamButtonStyle(Button button) {
+        boolean enabled = button.isEnabled();
         button.setAllCaps(false);
         button.setTextSize(15);
-        button.setTextColor(COLOR_STREAM_BUTTON_TEXT);
+        button.setTextColor(enabled ? COLOR_STREAM_BUTTON_TEXT : COLOR_DISABLED_BUTTON_TEXT);
         button.setGravity(Gravity.CENTER);
         button.setMinHeight(dp(button, 42));
         button.setPadding(dp(button, 10), dp(button, 8), dp(button, 10), dp(button, 8));
         GradientDrawable background = new GradientDrawable();
         background.setShape(GradientDrawable.RECTANGLE);
-        background.setColor(COLOR_STREAM_BUTTON);
+        background.setColor(enabled ? COLOR_STREAM_BUTTON : COLOR_DISABLED_BUTTON);
         background.setCornerRadius(dp(button, 10));
         button.setBackground(background);
     }
