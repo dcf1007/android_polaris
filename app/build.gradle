@@ -10,8 +10,8 @@ android {
         applicationId 'com.dcf1007.androidpolaris'
         minSdk 23
         targetSdk 33
-        versionCode 55
-        versionName '0.2.53'
+        versionCode 56
+        versionName '0.2.54'
     }
 
     compileOptions {
