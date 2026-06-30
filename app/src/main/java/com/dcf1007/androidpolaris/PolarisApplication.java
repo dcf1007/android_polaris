@@ -6,12 +6,18 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.TextView;
 
 import com.dcf1007.androidpolaris.camera.MainInterfaceOrganizer;
 
@@ -28,6 +34,8 @@ import java.util.Locale;
 public final class PolarisApplication extends Application {
     private static final int USB_VIDEO_CLASS = 14;
     private static final int AUTO_QUERY_MARKER_KEY = 0x706f6c61; // "pola"
+    private static final int COLOR_STREAM_BUTTON = Color.rgb(134, 183, 255);
+    private static final int COLOR_STREAM_BUTTON_TEXT = Color.rgb(6, 16, 31);
 
     private Activity currentMainActivity;
 
@@ -76,6 +84,7 @@ public final class PolarisApplication extends Application {
         contentRoot.post(new Runnable() {
             @Override public void run() {
                 MainInterfaceOrganizer.organize(contentRoot);
+                sanitizeVisibleStreamControls(contentRoot);
                 UsbManager usbManager = (UsbManager) activity.getSystemService(Context.USB_SERVICE);
                 if (usbManager == null || usbManager.getDeviceList().isEmpty()) return;
 
@@ -88,6 +97,84 @@ public final class PolarisApplication extends Application {
                 }
             }
         });
+    }
+
+    /**
+     * Removes legacy disconnect-style stream controls left by older layouts and keeps the visible
+     * refresh/start/stop stream row styled consistently.
+     */
+    private static void sanitizeVisibleStreamControls(View root) {
+        removeViewsContainingExactText(root, "Stop camera");
+        renameExactButtonText(root, "Start selected stream", "Start stream");
+        styleStreamButtons(root);
+    }
+
+    private static boolean removeViewsContainingExactText(View view, String text) {
+        if (!(view instanceof ViewGroup)) return false;
+        ViewGroup group = (ViewGroup) view;
+        boolean removedAny = false;
+        for (int index = group.getChildCount() - 1; index >= 0; index--) {
+            View child = group.getChildAt(index);
+            if (containsExactText(child, text)) {
+                group.removeViewAt(index);
+                removedAny = true;
+            } else if (removeViewsContainingExactText(child, text)) {
+                removedAny = true;
+            }
+        }
+        return removedAny;
+    }
+
+    private static void renameExactButtonText(View view, String from, String to) {
+        if (view instanceof Button && from.contentEquals(((Button) view).getText())) {
+            ((Button) view).setText(to);
+        }
+        if (!(view instanceof ViewGroup)) return;
+        ViewGroup group = (ViewGroup) view;
+        for (int index = 0; index < group.getChildCount(); index++) renameExactButtonText(group.getChildAt(index), from, to);
+    }
+
+    private static void styleStreamButtons(View view) {
+        if (view instanceof Button) {
+            Button button = (Button) view;
+            CharSequence text = button.getText();
+            if ("Refresh USB devices".contentEquals(text)
+                    || "Start stream".contentEquals(text)
+                    || "Stop stream".contentEquals(text)) {
+                applyPrimaryStreamButtonStyle(button);
+            }
+        }
+        if (!(view instanceof ViewGroup)) return;
+        ViewGroup group = (ViewGroup) view;
+        for (int index = 0; index < group.getChildCount(); index++) styleStreamButtons(group.getChildAt(index));
+    }
+
+    private static void applyPrimaryStreamButtonStyle(Button button) {
+        button.setAllCaps(false);
+        button.setTextSize(15);
+        button.setTextColor(COLOR_STREAM_BUTTON_TEXT);
+        button.setGravity(Gravity.CENTER);
+        button.setMinHeight(dp(button, 42));
+        button.setPadding(dp(button, 10), dp(button, 8), dp(button, 10), dp(button, 8));
+        GradientDrawable background = new GradientDrawable();
+        background.setShape(GradientDrawable.RECTANGLE);
+        background.setColor(COLOR_STREAM_BUTTON);
+        background.setCornerRadius(dp(button, 10));
+        button.setBackground(background);
+    }
+
+    private static boolean containsExactText(View view, String text) {
+        if (view instanceof TextView && text.contentEquals(((TextView) view).getText())) return true;
+        if (!(view instanceof ViewGroup)) return false;
+        ViewGroup group = (ViewGroup) view;
+        for (int index = 0; index < group.getChildCount(); index++) {
+            if (containsExactText(group.getChildAt(index), text)) return true;
+        }
+        return false;
+    }
+
+    private static int dp(View view, int value) {
+        return Math.round(value * view.getContext().getResources().getDisplayMetrics().density);
     }
 
     private static void triggerAutomaticCameraQuery(Activity activity) {
