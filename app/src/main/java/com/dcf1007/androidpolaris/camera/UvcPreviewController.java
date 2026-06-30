@@ -36,8 +36,9 @@ import java.util.Map;
  * camera candidates and lets libuvc perform the real validation/query step.</p>
  *
  * <p>The preview lifecycle remains explicit: query capabilities first, select stream type,
- * resolution and FPS, then start preview. Stream settings are changed by closing/reopening the
- * camera, not by mutating preview size on a live stream.</p>
+ * resolution and FPS, then start preview. Stream changes require stopping the preview stream first;
+ * the queried camera session and USB permission remain available until the camera is closed or
+ * disconnected.</p>
  */
 public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
@@ -258,7 +259,7 @@ public final class UvcPreviewController {
         }
         refreshDetectedUsbDeviceCache();
         if (previewRunning) {
-            publishCapabilities("USB devices refreshed. Preview is running; stop camera before querying another device. Raw USB candidates: " + detectedUvcDevicesById.size() + ".");
+            publishCapabilities("USB devices refreshed. Preview is running; stop stream before querying another device. Raw USB candidates: " + detectedUvcDevicesById.size() + ".");
             return;
         }
         publishCapabilities("Refreshing USB devices. Raw USB candidates: " + detectedUvcDevicesById.size() + ".");
@@ -313,7 +314,7 @@ public final class UvcPreviewController {
         if (streamMode == null) return;
         requestedStreamMode = findEquivalentModeOrDefault(streamMode);
         if (requestedStreamMode == null) return;
-        String action = previewRunning ? "Stop preview before changing stream." : "Press Start selected stream to open preview.";
+        String action = previewRunning ? "Stop stream before changing stream settings." : "Press Start stream to open preview.";
         publishCapabilities("Selected UVC stream: " + requestedStreamMode.fullLabel() + ". " + action);
     }
 
@@ -334,6 +335,29 @@ public final class UvcPreviewController {
             return;
         }
         startPreviewByReopeningCamera(requestedStreamMode);
+    }
+
+    void stopStream() {
+        if (activeCamera == null) {
+            publishCapabilities("No queried UVC camera is open. Press Refresh USB devices first.");
+            return;
+        }
+        if (!previewRunning) {
+            activeStreamMode = null;
+            publishCapabilities("UVC stream is already stopped. Stream type, resolution and FPS controls are unlocked.");
+            return;
+        }
+        try {
+            activeCamera.stopPreview();
+        } catch (Throwable throwable) {
+            notifyStatus("Stop stream warning: " + describeThrowable(throwable));
+        } finally {
+            previewRunning = false;
+            activeStreamMode = null;
+            previewStartRetryScheduled = false;
+            previewStartPendingUntilSurfaceReady = false;
+            publishCapabilities("UVC stream stopped. Camera remains queried; stream type, resolution and FPS controls are unlocked.");
+        }
     }
 
     public void setCameraControls(int brightnessPercent, int contrastPercent, int gainPercent,
@@ -425,7 +449,7 @@ public final class UvcPreviewController {
             requestedStreamMode = findEquivalentModeOrDefault(requestedStreamMode);
             queryDeviceCapabilitiesAfterOpen(camera);
             applyCameraControls("capability query");
-            publishCapabilities("UVC capabilities queried by libuvc. Select stream type/resolution/FPS, then press Start selected stream.");
+            publishCapabilities("UVC capabilities queried by libuvc. Select stream type/resolution/FPS, then press Start stream.");
         } catch (Throwable throwable) {
             closeCurrentCameraWithoutPublishing();
             publishCapabilities("libuvc rejected or failed to query this USB device: " + describeThrowable(throwable));
