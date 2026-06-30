@@ -17,7 +17,6 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.TextView;
 
 import com.dcf1007.androidpolaris.camera.MainInterfaceOrganizer;
 
@@ -100,29 +99,27 @@ public final class PolarisApplication extends Application {
     }
 
     /**
-     * Removes legacy disconnect-style stream controls left by older layouts and keeps the visible
-     * refresh/start/stop stream row styled consistently.
+     * Sanitizes legacy stream controls without removing any layout container. The previous version
+     * removed a parent when any descendant matched, which could blank the screen. This version only
+     * removes an exact legacy Button leaf and otherwise recurses into child groups.
      */
     private static void sanitizeVisibleStreamControls(View root) {
-        removeViewsContainingExactText(root, "Stop camera");
+        removeExactButtonLeaves(root, "Stop camera");
         renameExactButtonText(root, "Start selected stream", "Start stream");
         styleStreamButtons(root);
     }
 
-    private static boolean removeViewsContainingExactText(View view, String text) {
-        if (!(view instanceof ViewGroup)) return false;
+    private static void removeExactButtonLeaves(View view, String text) {
+        if (!(view instanceof ViewGroup)) return;
         ViewGroup group = (ViewGroup) view;
-        boolean removedAny = false;
         for (int index = group.getChildCount() - 1; index >= 0; index--) {
             View child = group.getChildAt(index);
-            if (containsExactText(child, text)) {
+            if (child instanceof Button && text.contentEquals(((Button) child).getText())) {
                 group.removeViewAt(index);
-                removedAny = true;
-            } else if (removeViewsContainingExactText(child, text)) {
-                removedAny = true;
+            } else {
+                removeExactButtonLeaves(child, text);
             }
         }
-        return removedAny;
     }
 
     private static void renameExactButtonText(View view, String from, String to) {
@@ -161,16 +158,6 @@ public final class PolarisApplication extends Application {
         background.setColor(COLOR_STREAM_BUTTON);
         background.setCornerRadius(dp(button, 10));
         button.setBackground(background);
-    }
-
-    private static boolean containsExactText(View view, String text) {
-        if (view instanceof TextView && text.contentEquals(((TextView) view).getText())) return true;
-        if (!(view instanceof ViewGroup)) return false;
-        ViewGroup group = (ViewGroup) view;
-        for (int index = 0; index < group.getChildCount(); index++) {
-            if (containsExactText(group.getChildAt(index), text)) return true;
-        }
-        return false;
     }
 
     private static int dp(View view, int value) {
