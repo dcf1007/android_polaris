@@ -189,6 +189,9 @@ final class UvcCameraOptionsPanel {
         summaryView = text("Automatic USB query lists stream modes and hardware controls after a camera is connected.", 11, false);
         summaryView.setTextColor(Color.rgb(180, 190, 203));
         body.addView(summaryView, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(button("Refresh USB devices", true, new View.OnClickListener() {
+            @Override public void onClick(View view) { controller.refreshUsbDevices(); }
+        }), new LinearLayout.LayoutParams(-1, -2));
         body.addView(button("Save UVC log to Downloads", true, new View.OnClickListener() {
             @Override public void onClick(View view) { controller.saveDebugLogToDownloads(); }
         }), new LinearLayout.LayoutParams(-1, -2));
