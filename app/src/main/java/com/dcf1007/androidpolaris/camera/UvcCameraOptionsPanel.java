@@ -27,6 +27,8 @@ final class UvcCameraOptionsPanel {
     private static final String STREAM_BUTTON_ROW_TAG = "android-polaris-primary-stream-buttons";
     private static final int COLOR_PRIMARY = Color.rgb(134, 183, 255);
     private static final int COLOR_PRIMARY_TEXT = Color.rgb(6, 16, 31);
+    private static final int COLOR_DISABLED_FILL = Color.rgb(58, 63, 73);
+    private static final int COLOR_DISABLED_TEXT = Color.rgb(154, 163, 176);
 
     private final Context context;
     private final UvcPreviewController controller;
@@ -103,6 +105,7 @@ final class UvcCameraOptionsPanel {
             streamModes.clear();
             streamModes.addAll(capabilities.streamModes);
         }
+
         UvcPreviewController.StreamMode capabilityMode = capabilities.selectedStreamMode != null
                 ? capabilities.selectedStreamMode
                 : capabilities.activeStreamMode;
@@ -113,6 +116,7 @@ final class UvcCameraOptionsPanel {
         } else if (selectedStreamMode == null) {
             selectedStreamMode = capabilityMode;
         }
+
         if (modesChanged) rebuildStreamTypeSpinner();
         selectCurrentStreamInDropdowns();
         if (!userSelectedStreamMode && !capabilities.previewRunning && selectedStreamMode != null && !sameMode(selectedStreamMode, capabilityMode)) {
@@ -123,6 +127,7 @@ final class UvcCameraOptionsPanel {
         streamTypeSpinner.setEnabled(streamSelectionEnabled);
         resolutionSpinner.setEnabled(streamSelectionEnabled && !resolutionOptions.isEmpty());
         fpsSpinner.setEnabled(streamSelectionEnabled && !fpsOptions.isEmpty());
+
         if (refreshUsbButton != null) {
             refreshUsbButton.setEnabled(!capabilities.previewRunning);
             stylePrimaryButton(refreshUsbButton);
@@ -163,7 +168,9 @@ final class UvcCameraOptionsPanel {
         title.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) {
                 collapsed = !collapsed;
-                for (int i = 1; i < panel.getChildCount(); i++) panel.getChildAt(i).setVisibility(collapsed ? View.GONE : View.VISIBLE);
+                for (int index = 1; index < panel.getChildCount(); index++) {
+                    panel.getChildAt(index).setVisibility(collapsed ? View.GONE : View.VISIBLE);
+                }
                 title.setText(collapsed ? "UVC hardware controls  ▼" : "UVC hardware controls  ▲");
             }
         });
@@ -198,6 +205,7 @@ final class UvcCameraOptionsPanel {
         autoExposureCheckBox.setTextSize(12);
         autoExposureCheckBox.setEnabled(false);
         body.addView(autoExposureCheckBox, new LinearLayout.LayoutParams(-1, -2));
+
         summaryView = text("Automatic USB query lists stream modes and hardware controls after a camera is connected.", 11, false);
         summaryView.setTextColor(Color.rgb(180, 190, 203));
         body.addView(summaryView, new LinearLayout.LayoutParams(-1, -2));
@@ -238,8 +246,12 @@ final class UvcCameraOptionsPanel {
         });
         stylePrimaryButton(streamActionButton);
 
-        row.addView(refreshUsbButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
-        row.addView(streamActionButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
+        LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(0, -2, 1.0f);
+        refreshParams.setMargins(0, 0, dp(6), 0);
+        LinearLayout.LayoutParams streamParams = new LinearLayout.LayoutParams(0, -2, 1.0f);
+        streamParams.setMargins(dp(6), 0, 0, 0);
+        row.addView(refreshUsbButton, refreshParams);
+        row.addView(streamActionButton, streamParams);
         cameraPanel.addView(row, Math.max(0, insertIndex), new LinearLayout.LayoutParams(-1, -2));
     }
 
@@ -395,10 +407,10 @@ final class UvcCameraOptionsPanel {
     private int indexOfHighestFps() {
         int bestIndex = -1;
         int bestFps = -1;
-        for (int i = 0; i < fpsOptions.size(); i++) {
-            if (fpsOptions.get(i) > bestFps) {
-                bestFps = fpsOptions.get(i);
-                bestIndex = i;
+        for (int index = 0; index < fpsOptions.size(); index++) {
+            if (fpsOptions.get(index) > bestFps) {
+                bestFps = fpsOptions.get(index);
+                bestIndex = index;
             }
         }
         return bestIndex;
@@ -415,11 +427,13 @@ final class UvcCameraOptionsPanel {
         row.addView(value, new LinearLayout.LayoutParams(dp(70), -2));
         row.addView(plus, new LinearLayout.LayoutParams(dp(44), -2));
         parent.addView(row, new LinearLayout.LayoutParams(-1, -2));
+
         SeekBar seekBar = new SeekBar(context);
         seekBar.setMax(100);
         seekBar.setProgress(50);
         seekBar.setEnabled(false);
         parent.addView(seekBar, new LinearLayout.LayoutParams(-1, -2));
+
         final FineSlider fineSlider = new FineSlider(seekBar, value, minus, plus);
         minus.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { stepFineSlider(fineSlider, -FINE_STEP_PERCENT); }
@@ -450,35 +464,35 @@ final class UvcCameraOptionsPanel {
     }
 
     private String summary(UvcPreviewController.UvcCapabilities capabilities) {
-        StringBuilder b = new StringBuilder();
-        b.append(capabilities.statusText == null ? "UVC status unavailable." : capabilities.statusText).append('\n');
-        b.append("Preview: ").append(capabilities.previewRunning ? "running; stream controls locked" : "stopped; stream controls selectable").append('\n');
-        b.append("Stream modes: ").append(capabilities.streamModes.size()).append('\n');
-        if (capabilities.selectedStreamMode != null) b.append("Selected: ").append(capabilities.selectedStreamMode.fullLabel()).append('\n');
-        if (capabilities.activeStreamMode != null) b.append("Active: ").append(capabilities.activeStreamMode.fullLabel()).append('\n');
-        b.append("Brightness: ").append(capabilities.brightnessSupported ? "available" : "not reported").append('\n');
-        b.append("Contrast: ").append(capabilities.contrastSupported ? "available" : "not reported").append('\n');
-        b.append("Gain: ").append(capabilities.gainSupported ? "available" : "not reported").append('\n');
-        b.append("Exposure: ").append(capabilities.exposureSupported ? capabilities.exposureRangeText : "not reported").append('\n');
-        b.append("Auto exposure: ").append(capabilities.autoExposureSupported ? "available" : "not reported");
-        return b.toString();
+        StringBuilder builder = new StringBuilder();
+        builder.append(capabilities.statusText == null ? "UVC status unavailable." : capabilities.statusText).append('\n');
+        builder.append("Preview: ").append(capabilities.previewRunning ? "running; stream controls locked" : "stopped; stream controls selectable").append('\n');
+        builder.append("Stream modes: ").append(capabilities.streamModes.size()).append('\n');
+        if (capabilities.selectedStreamMode != null) builder.append("Selected: ").append(capabilities.selectedStreamMode.fullLabel()).append('\n');
+        if (capabilities.activeStreamMode != null) builder.append("Active: ").append(capabilities.activeStreamMode.fullLabel()).append('\n');
+        builder.append("Brightness: ").append(capabilities.brightnessSupported ? "available" : "not reported").append('\n');
+        builder.append("Contrast: ").append(capabilities.contrastSupported ? "available" : "not reported").append('\n');
+        builder.append("Gain: ").append(capabilities.gainSupported ? "available" : "not reported").append('\n');
+        builder.append("Exposure: ").append(capabilities.exposureSupported ? capabilities.exposureRangeText : "not reported").append('\n');
+        builder.append("Auto exposure: ").append(capabilities.autoExposureSupported ? "available" : "not reported");
+        return builder.toString();
     }
 
     private void removeTaggedHardwarePanels(LinearLayout cameraPanel) {
-        for (int i = cameraPanel.getChildCount() - 1; i >= 0; i--) {
-            if (MainInterfaceOrganizer.HARDWARE_CONTROLS_TAG.equals(cameraPanel.getChildAt(i).getTag())) cameraPanel.removeViewAt(i);
+        for (int index = cameraPanel.getChildCount() - 1; index >= 0; index--) {
+            if (MainInterfaceOrganizer.HARDWARE_CONTROLS_TAG.equals(cameraPanel.getChildAt(index).getTag())) cameraPanel.removeViewAt(index);
         }
     }
 
     private void removeTaggedRows(LinearLayout panel, String tag) {
-        for (int i = panel.getChildCount() - 1; i >= 0; i--) {
-            if (tag.equals(panel.getChildAt(i).getTag())) panel.removeViewAt(i);
+        for (int index = panel.getChildCount() - 1; index >= 0; index--) {
+            if (tag.equals(panel.getChildAt(index).getTag())) panel.removeViewAt(index);
         }
     }
 
     private View findDirectChildWithText(LinearLayout panel, String wantedText) {
-        for (int i = 0; i < panel.getChildCount(); i++) {
-            View child = panel.getChildAt(i);
+        for (int index = 0; index < panel.getChildCount(); index++) {
+            View child = panel.getChildAt(index);
             if (containsText(child, wantedText)) return child;
         }
         return null;
@@ -488,18 +502,22 @@ final class UvcCameraOptionsPanel {
         if (view instanceof TextView && wantedText.contentEquals(((TextView) view).getText())) return true;
         if (!(view instanceof ViewGroup)) return false;
         ViewGroup group = (ViewGroup) view;
-        for (int i = 0; i < group.getChildCount(); i++) if (containsText(group.getChildAt(i), wantedText)) return true;
+        for (int index = 0; index < group.getChildCount(); index++) if (containsText(group.getChildAt(index), wantedText)) return true;
         return false;
     }
 
     private boolean sameModeList(List<UvcPreviewController.StreamMode> first, List<UvcPreviewController.StreamMode> second) {
         if (first.size() != second.size()) return false;
-        for (int i = 0; i < first.size(); i++) if (!sameMode(first.get(i), second.get(i))) return false;
+        for (int index = 0; index < first.size(); index++) if (!sameMode(first.get(index), second.get(index))) return false;
         return true;
     }
 
-    private boolean sameMode(UvcPreviewController.StreamMode a, UvcPreviewController.StreamMode b) {
-        return a != null && b != null && a.frameFormat == b.frameFormat && a.width == b.width && a.height == b.height && a.fps == b.fps;
+    private boolean sameMode(UvcPreviewController.StreamMode first, UvcPreviewController.StreamMode second) {
+        return first != null && second != null
+                && first.frameFormat == second.frameFormat
+                && first.width == second.width
+                && first.height == second.height
+                && first.fps == second.fps;
     }
 
     private Button button(String text, boolean enabled, View.OnClickListener listener) {
@@ -513,15 +531,16 @@ final class UvcCameraOptionsPanel {
     }
 
     private void stylePrimaryButton(Button button) {
+        boolean enabled = button.isEnabled();
         button.setAllCaps(false);
         button.setTextSize(15);
-        button.setTextColor(COLOR_PRIMARY_TEXT);
+        button.setTextColor(enabled ? COLOR_PRIMARY_TEXT : COLOR_DISABLED_TEXT);
         button.setGravity(Gravity.CENTER);
         button.setMinHeight(dp(42));
         button.setPadding(dp(10), dp(8), dp(10), dp(8));
         GradientDrawable background = new GradientDrawable();
         background.setShape(GradientDrawable.RECTANGLE);
-        background.setColor(COLOR_PRIMARY);
+        background.setColor(enabled ? COLOR_PRIMARY : COLOR_DISABLED_FILL);
         background.setCornerRadius(dp(10));
         button.setBackground(background);
     }
