@@ -39,7 +39,8 @@ final class UvcCameraOptionsPanel {
     private Spinner streamTypeSpinner;
     private Spinner resolutionSpinner;
     private Spinner fpsSpinner;
-    private Button startStreamButton;
+    private Button refreshUsbButton;
+    private Button streamActionButton;
     private FineSlider brightnessSlider;
     private FineSlider contrastSlider;
     private FineSlider gainSlider;
@@ -50,6 +51,7 @@ final class UvcCameraOptionsPanel {
     private boolean collapsed;
     private boolean lastCameraOpen;
     private boolean lastExposureSupported;
+    private boolean lastPreviewRunning;
     private boolean userSelectedStreamMode;
     private UvcPreviewController.StreamMode selectedStreamMode;
 
@@ -94,6 +96,7 @@ final class UvcCameraOptionsPanel {
         binding = true;
         lastCameraOpen = capabilities.cameraOpen;
         lastExposureSupported = capabilities.exposureSupported;
+        lastPreviewRunning = capabilities.previewRunning;
 
         boolean modesChanged = !sameModeList(streamModes, capabilities.streamModes);
         if (modesChanged) {
@@ -120,10 +123,15 @@ final class UvcCameraOptionsPanel {
         streamTypeSpinner.setEnabled(streamSelectionEnabled);
         resolutionSpinner.setEnabled(streamSelectionEnabled && !resolutionOptions.isEmpty());
         fpsSpinner.setEnabled(streamSelectionEnabled && !fpsOptions.isEmpty());
-        if (startStreamButton != null) {
-            startStreamButton.setEnabled(streamSelectionEnabled && selectedModeFromDropdowns() != null);
-            startStreamButton.setText("Start stream");
-            stylePrimaryButton(startStreamButton);
+        if (refreshUsbButton != null) {
+            refreshUsbButton.setEnabled(!capabilities.previewRunning);
+            stylePrimaryButton(refreshUsbButton);
+        }
+        if (streamActionButton != null) {
+            boolean canStart = streamSelectionEnabled && selectedModeFromDropdowns() != null;
+            streamActionButton.setEnabled(capabilities.previewRunning || canStart);
+            streamActionButton.setText(capabilities.previewRunning ? "Stop stream" : "Start stream");
+            stylePrimaryButton(streamActionButton);
         }
 
         brightnessSlider.setEnabled(capabilities.cameraOpen && capabilities.brightnessSupported);
@@ -193,9 +201,6 @@ final class UvcCameraOptionsPanel {
         summaryView = text("Automatic USB query lists stream modes and hardware controls after a camera is connected.", 11, false);
         summaryView.setTextColor(Color.rgb(180, 190, 203));
         body.addView(summaryView, new LinearLayout.LayoutParams(-1, -2));
-        body.addView(button("Refresh USB devices", true, new View.OnClickListener() {
-            @Override public void onClick(View view) { controller.refreshUsbDevices(); }
-        }), new LinearLayout.LayoutParams(-1, -2));
         body.addView(button("Save UVC log to Downloads", true, new View.OnClickListener() {
             @Override public void onClick(View view) { controller.saveDebugLogToDownloads(); }
         }), new LinearLayout.LayoutParams(-1, -2));
@@ -207,38 +212,35 @@ final class UvcCameraOptionsPanel {
 
     private void installPrimaryStreamButtonRow(LinearLayout cameraPanel) {
         removeTaggedRows(cameraPanel, STREAM_BUTTON_ROW_TAG);
-        View stopButton = findDirectChildWithText(cameraPanel, "Stop stream");
-        if (stopButton == null) stopButton = findDirectChildWithText(cameraPanel, "Stop camera");
-        if (stopButton == null) {
-            startStreamButton = button("Start stream", false, new View.OnClickListener() {
-                @Override public void onClick(View view) { controller.startSelectedStream(); }
-            });
-            stylePrimaryButton(startStreamButton);
-            return;
+        int insertIndex = Math.min(2, cameraPanel.getChildCount());
+        View oldStopButton = findDirectChildWithText(cameraPanel, "Stop stream");
+        if (oldStopButton == null) oldStopButton = findDirectChildWithText(cameraPanel, "Stop camera");
+        if (oldStopButton != null) {
+            insertIndex = cameraPanel.indexOfChild(oldStopButton);
+            cameraPanel.removeView(oldStopButton);
         }
-
-        int stopIndex = cameraPanel.indexOfChild(stopButton);
-        cameraPanel.removeView(stopButton);
 
         LinearLayout row = new LinearLayout(context);
         row.setTag(STREAM_BUTTON_ROW_TAG);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, 0, 0, dp(6));
-        startStreamButton = button("Start stream", false, new View.OnClickListener() {
-            @Override public void onClick(View view) { controller.startSelectedStream(); }
+
+        refreshUsbButton = button("Refresh USB devices", true, new View.OnClickListener() {
+            @Override public void onClick(View view) { controller.refreshUsbDevices(); }
         });
-        stylePrimaryButton(startStreamButton);
-        if (stopButton instanceof Button) {
-            Button button = (Button) stopButton;
-            button.setText("Stop stream");
-            button.setAllCaps(false);
-            button.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View view) { controller.stopStream(); }
-            });
-        }
-        row.addView(startStreamButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
-        row.addView(stopButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
-        cameraPanel.addView(row, Math.max(0, stopIndex), new LinearLayout.LayoutParams(-1, -2));
+        stylePrimaryButton(refreshUsbButton);
+
+        streamActionButton = button("Start stream", false, new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                if (lastPreviewRunning) controller.stopStream();
+                else controller.startSelectedStream();
+            }
+        });
+        stylePrimaryButton(streamActionButton);
+
+        row.addView(refreshUsbButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
+        row.addView(streamActionButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
+        cameraPanel.addView(row, Math.max(0, insertIndex), new LinearLayout.LayoutParams(-1, -2));
     }
 
     private void wireActions() {
