@@ -43,6 +43,7 @@ public final class UvcPreviewController {
     private static final int USB_VIDEO_CLASS = 14;
     private static final int MANUAL_EXPOSURE_MODE = 1;
     private static final int AUTO_EXPOSURE_MODE = 2;
+    private static final int FIXED_FRAME_RATE_EXPOSURE_PRIORITY = 0;
     private static final int STREAM_TYPE_YUYV = 4;
     private static final int STREAM_TYPE_MJPEG = 6;
     private static final int FALLBACK_FPS = 30;
@@ -155,6 +156,7 @@ public final class UvcPreviewController {
     private boolean gainSupported;
     private boolean exposureSupported;
     private boolean autoExposureSupported;
+    private boolean exposurePrioritySupported;
 
     private Field exposureNativePointerField;
     private Field exposureMinimumField;
@@ -167,6 +169,9 @@ public final class UvcPreviewController {
     private Method updateExposureModeLimitMethod;
     private Method getExposureModeMethod;
     private Method setExposureModeMethod;
+    private Method updateExposurePriorityLimitMethod;
+    private Method getExposurePriorityMethod;
+    private Method setExposurePriorityMethod;
     private boolean nativeExposureAccessReady;
 
     public UvcPreviewController(Context context, FrameLayout previewContainer, Listener listener) {
@@ -179,7 +184,7 @@ public final class UvcPreviewController {
         configurePreviewTextureView();
         cameraOptionsPanel = new UvcCameraOptionsPanel(context, this);
         applyPreviewFitModeLater();
-        publishCapabilities("UVC backend ready. Connect a USB camera or press Open/query USB UVC camera.");
+        publishCapabilities("UVC backend ready. Connect a USB camera or press Refresh USB devices.");
     }
 
     public boolean register() {
@@ -246,6 +251,20 @@ public final class UvcPreviewController {
         }
     }
 
+    void refreshUsbDevices() {
+        if (queryInProgress) {
+            publishCapabilities("USB refresh ignored because a query is already in progress.");
+            return;
+        }
+        refreshDetectedUsbDeviceCache();
+        if (previewRunning) {
+            publishCapabilities("USB devices refreshed. Preview is running; stop camera before querying another device. Raw USB candidates: " + detectedUvcDevicesById.size() + ".");
+            return;
+        }
+        publishCapabilities("Refreshing USB devices. Raw USB candidates: " + detectedUvcDevicesById.size() + ".");
+        requestPermissionAndOpenFirstCamera();
+    }
+
     public void closeActiveCamera() {
         closeCurrentCameraWithoutPublishing();
         availableStreamModes = new ArrayList<>();
@@ -255,6 +274,7 @@ public final class UvcPreviewController {
         gainSupported = false;
         exposureSupported = false;
         autoExposureSupported = false;
+        exposurePrioritySupported = false;
         publishCapabilities("UVC camera closed.");
     }
 
@@ -272,7 +292,9 @@ public final class UvcPreviewController {
                     .append(", contrast=").append(contrastSupported)
                     .append(", gain=").append(gainSupported)
                     .append(", exposure=").append(exposureSupported)
-                    .append(", auto exposure=").append(autoExposureSupported).append('\n')
+                    .append(", auto exposure=").append(autoExposureSupported)
+                    .append(", exposure priority=").append(exposurePrioritySupported).append('\n')
+                    .append(describeExposureState()).append('\n')
                     .append(describeStreamModes());
         }
         return builder.toString().trim();
@@ -297,7 +319,7 @@ public final class UvcPreviewController {
 
     void startSelectedStream() {
         if (activeControlBlock == null || pendingOpenDevice == null) {
-            publishCapabilities("No permitted UVC camera is available. Press Open/query USB UVC camera first.");
+            publishCapabilities("No permitted UVC camera is available. Press Refresh USB devices first.");
             return;
         }
         if (requestedStreamMode == null) requestedStreamMode = chooseDefaultStreamMode();
@@ -463,6 +485,7 @@ public final class UvcPreviewController {
         gainSupported = camera != null && checkControlSupport(UVCCamera.PU_GAIN);
         exposureSupported = nativeExposureAccessReady && checkControlSupport(UVCCamera.CTRL_AE_ABS);
         autoExposureSupported = nativeExposureAccessReady && checkControlSupport(UVCCamera.CTRL_AE);
+        exposurePrioritySupported = nativeExposureAccessReady && checkControlSupport(UVCCamera.CTRL_AE_PRIORITY);
         if (autoExposureSupported) autoExposureEnabled = isAutoExposureCurrentlyEnabled();
         if (exposureSupported) {
             int queriedExposure = getExposurePercentFromDevice();
@@ -579,9 +602,10 @@ public final class UvcPreviewController {
         try { if (gainSupported) activeCamera.setGain(gainPercent); } catch (Throwable ignored) { }
         if (nativeExposureAccessReady) {
             if (autoExposureSupported) setAutoExposureEnabled(autoExposureEnabled);
+            if (!autoExposureEnabled && exposurePrioritySupported) setFixedFrameRateExposurePriority();
             if (exposureSupported && !autoExposureEnabled) setExposurePercentOnDevice(exposurePercent);
         }
-        notifyStatus("Camera controls applied: " + reason + ".");
+        notifyStatus("Camera controls applied: " + reason + ". " + describeExposureState());
     }
 
     private void prepareNativeExposureAccess() {
@@ -599,6 +623,9 @@ public final class UvcPreviewController {
             updateExposureModeLimitMethod = accessibleMethod(cls, "nativeUpdateExposureModeLimit", long.class);
             getExposureModeMethod = accessibleMethod(cls, "nativeGetExposureMode", long.class);
             setExposureModeMethod = accessibleMethod(cls, "nativeSetExposureMode", long.class, int.class);
+            updateExposurePriorityLimitMethod = accessibleMethod(cls, "nativeUpdateExposurePriorityLimit", long.class);
+            getExposurePriorityMethod = accessibleMethod(cls, "nativeGetExposurePriority", long.class);
+            setExposurePriorityMethod = accessibleMethod(cls, "nativeSetExposurePriority", long.class, int.class);
             nativeExposureAccessReady = true;
         } catch (ReflectiveOperationException ignored) { clearNativeExposureAccess(); }
     }
@@ -615,6 +642,9 @@ public final class UvcPreviewController {
         updateExposureModeLimitMethod = null;
         getExposureModeMethod = null;
         setExposureModeMethod = null;
+        updateExposurePriorityLimitMethod = null;
+        getExposurePriorityMethod = null;
+        setExposurePriorityMethod = null;
         nativeExposureAccessReady = false;
     }
 
@@ -630,6 +660,14 @@ public final class UvcPreviewController {
         try {
             updateExposureModeLimit();
             setExposureModeMethod.invoke(null, nativeCameraPointer(), enabled ? preferredAutoExposureMode() : MANUAL_EXPOSURE_MODE);
+            return true;
+        } catch (Throwable ignored) { return false; }
+    }
+
+    private boolean setFixedFrameRateExposurePriority() {
+        try {
+            updateExposurePriorityLimit();
+            setExposurePriorityMethod.invoke(null, nativeCameraPointer(), FIXED_FRAME_RATE_EXPOSURE_PRIORITY);
             return true;
         } catch (Throwable ignored) { return false; }
     }
@@ -654,12 +692,36 @@ public final class UvcPreviewController {
             updateExposureLimit();
             return "raw min=" + exposureMinimumField.getInt(activeCamera)
                     + ", max=" + exposureMaximumField.getInt(activeCamera)
-                    + ", def=" + exposureDefaultField.getInt(activeCamera);
+                    + ", def=" + exposureDefaultField.getInt(activeCamera)
+                    + ", priority supported=" + exposurePrioritySupported;
         } catch (Throwable ignored) { return "raw range unavailable"; }
+    }
+
+    private String describeExposureState() {
+        if (!nativeExposureAccessReady || activeCamera == null) return "Exposure state unavailable.";
+        StringBuilder builder = new StringBuilder("Exposure state:");
+        try {
+            updateExposureModeLimit();
+            builder.append(" mode=").append((Integer) getExposureModeMethod.invoke(null, nativeCameraPointer()));
+        } catch (Throwable ignored) { builder.append(" mode=?"); }
+        if (exposurePrioritySupported) {
+            try {
+                updateExposurePriorityLimit();
+                builder.append(", priority=").append((Integer) getExposurePriorityMethod.invoke(null, nativeCameraPointer()));
+            } catch (Throwable ignored) { builder.append(", priority=?"); }
+        } else {
+            builder.append(", priority=unsupported");
+        }
+        try {
+            updateExposureLimit();
+            builder.append(", rawExposure=").append((Integer) getExposureMethod.invoke(null, nativeCameraPointer()));
+        } catch (Throwable ignored) { builder.append(", rawExposure=?"); }
+        return builder.toString();
     }
 
     private void updateExposureLimit() throws ReflectiveOperationException { updateExposureLimitMethod.invoke(activeCamera, nativeCameraPointer()); }
     private void updateExposureModeLimit() throws ReflectiveOperationException { updateExposureModeLimitMethod.invoke(activeCamera, nativeCameraPointer()); }
+    private void updateExposurePriorityLimit() throws ReflectiveOperationException { updateExposurePriorityLimitMethod.invoke(activeCamera, nativeCameraPointer()); }
     private long nativeCameraPointer() throws IllegalAccessException { return exposureNativePointerField.getLong(activeCamera); }
     private int preferredAutoExposureMode() throws IllegalAccessException {
         int defaultMode = exposureModeDefaultField.getInt(activeCamera);
