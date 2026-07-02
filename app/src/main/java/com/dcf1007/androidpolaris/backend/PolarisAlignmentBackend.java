@@ -11,13 +11,11 @@ import java.util.Date;
 import java.util.Locale;
 
 /**
- * Backend for the Polaris/HA/RA collapsible panel.
- *
- * <p>The controller reads text from the UI and passes a typed request here. This backend validates
- * astronomical input, runs the calculator, formats readouts, and exposes constants needed by the
- * reticle stage.</p>
+ * Transitional Polaris backend API retained while the UI controller is consolidated around
+ * {@link PolarisBackend}. The implementation remains unchanged until the low-level calculator is
+ * fully merged into PolarisBackend.
  */
-public final class PolarisAlignmentBackend {
+public class PolarisAlignmentBackend {
     public static final double RETICLE_ASPECT_HEIGHT_OVER_WIDTH =
             PolarisAlignmentCalculator.RETICLE_VIEWBOX_HEIGHT / PolarisAlignmentCalculator.RETICLE_VIEWBOX_WIDTH;
     public static final String[] MONTH_NAMES = {
