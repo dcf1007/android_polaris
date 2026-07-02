@@ -17,11 +17,10 @@ import java.lang.reflect.Method;
 import java.util.Locale;
 
 /**
- * Application-level USB coordinator.
+ * Application-level USB attach coordinator.
  *
- * <p>MainActivity now builds the final UI directly. This application class no longer sanitizes,
- * hides, styles or moves views. It only creates the UVC controller if needed and triggers the same
- * camera-query method when Android reports a raw USB device on app start or attach.</p>
+ * <p>This class has no UI cleanup or backend implementation. It observes Android USB attach events
+ * and asks MainActivity to run the same camera-query flow used by the Refresh USB devices button.</p>
  */
 public final class PolarisApplication extends Application {
     private static final int USB_VIDEO_CLASS = 14;
@@ -34,19 +33,17 @@ public final class PolarisApplication extends Application {
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
             @Override public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
                 if (activity instanceof MainActivity) currentMainActivity = activity;
-                initializeAndMaybeQuery(activity, false);
+                maybeQueryAttachedUsb(activity, false);
             }
             @Override public void onActivityResumed(Activity activity) {
                 if (activity instanceof MainActivity) currentMainActivity = activity;
-                initializeAndMaybeQuery(activity, false);
+                maybeQueryAttachedUsb(activity, false);
             }
             @Override public void onActivityStarted(Activity activity) { }
             @Override public void onActivityPaused(Activity activity) { }
             @Override public void onActivityStopped(Activity activity) { }
             @Override public void onActivitySaveInstanceState(Activity activity, Bundle outState) { }
-            @Override public void onActivityDestroyed(Activity activity) {
-                if (activity == currentMainActivity) currentMainActivity = null;
-            }
+            @Override public void onActivityDestroyed(Activity activity) { if (activity == currentMainActivity) currentMainActivity = null; }
         });
     }
 
@@ -55,20 +52,19 @@ public final class PolarisApplication extends Application {
         BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
                 if (!UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) return;
-                if (currentMainActivity != null) initializeAndMaybeQuery(currentMainActivity, true);
+                if (currentMainActivity != null) maybeQueryAttachedUsb(currentMainActivity, true);
             }
         };
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
         else registerReceiver(receiver, filter);
     }
 
-    private static void initializeAndMaybeQuery(final Activity activity, final boolean forceQuery) {
+    private static void maybeQueryAttachedUsb(final Activity activity, final boolean forceQuery) {
         if (!(activity instanceof MainActivity)) return;
         final View root = activity.findViewById(android.R.id.content);
         if (root == null) return;
         root.post(new Runnable() {
             @Override public void run() {
-                ensureUvcController(activity);
                 UsbManager usbManager = (UsbManager) activity.getSystemService(Context.USB_SERVICE);
                 if (usbManager == null || usbManager.getDeviceList().isEmpty()) return;
                 boolean alreadyQueried = Boolean.TRUE.equals(root.getTag(AUTO_QUERY_MARKER_KEY));
@@ -79,16 +75,6 @@ public final class PolarisApplication extends Application {
                 }
             }
         });
-    }
-
-    private static void ensureUvcController(Activity activity) {
-        try {
-            Method method = MainActivity.class.getDeclaredMethod("ensureUvcPreviewController");
-            method.setAccessible(true);
-            method.invoke(activity);
-        } catch (Throwable throwable) {
-            reportToMainActivity(activity, "UVC controls failed to initialize: " + throwable.getClass().getSimpleName() + ".");
-        }
     }
 
     private static void triggerAutomaticCameraQuery(Activity activity) {
