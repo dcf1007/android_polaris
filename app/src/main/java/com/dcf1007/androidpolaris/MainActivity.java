@@ -1,101 +1,96 @@
 package com.dcf1007.androidpolaris;
 
-import android.Manifest;
 import android.app.Activity;
-import android.content.Context;
-import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
-import android.graphics.Color;
-import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
-import android.location.Location;
-import android.location.LocationManager;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.text.Editable;
-import android.text.InputType;
-import android.text.TextWatcher;
-import android.view.Gravity;
-import android.view.View;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.CheckBox;
-import android.widget.CompoundButton;
-import android.widget.EditText;
-import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
-import android.widget.SeekBar;
-import android.widget.Spinner;
-import android.widget.TextView;
 
-import com.dcf1007.androidpolaris.astro.PolarisAlignmentCalculator;
-import com.dcf1007.androidpolaris.camera.UvcPreviewController;
-import com.dcf1007.androidpolaris.model.AlignmentInput;
-import com.dcf1007.androidpolaris.model.AlignmentResult;
-import com.dcf1007.androidpolaris.model.RefractionMode;
-import com.dcf1007.androidpolaris.util.UiFormatting;
-import com.dcf1007.androidpolaris.view.ReticleOverlayView;
+import com.dcf1007.androidpolaris.backend.CameraHardwareBackend;
+import com.dcf1007.androidpolaris.backend.PolarisAlignmentBackend;
+import com.dcf1007.androidpolaris.backend.VideoAlignmentBackend;
+import com.dcf1007.androidpolaris.ui.MainScreenView;
+import com.dcf1007.androidpolaris.ui.MainUiController;
 
-import java.lang.reflect.Method;
-import java.text.ParseException;
-import java.util.Date;
-import java.util.Locale;
-
-/** Final native UI. Layout is built in source order; no legacy controls are hidden or moved later. */
+/**
+ * Android composition root for the app.
+ *
+ * <p>MainActivity owns Android lifecycle and permission callbacks. It creates the screen UI, creates
+ * the backend objects, and wires them through MainUiController. UI construction, UI state mutation,
+ * USB/libuvc execution, overlay state, and Polaris calculations live in separate files.</p>
+ */
 public final class MainActivity extends Activity {
-    private static final int REQ_UVC=1001, REQ_LOC=1002;
-    private static final String SETTINGS="android_polaris_overlay_settings", FIT_COVER="Cover / crop", FIT_CONTAIN="Contain / no crop", FIT_STRETCH="Stretch";
-    private static final String[] FITS={FIT_COVER,FIT_CONTAIN,FIT_STRETCH}, MONTHS={"January","February","March","April","May","June","July","August","September","October","November","December"};
-    private static final int[] MDAYS={31,28,31,30,31,30,31,31,30,31,30,31};
-    private static final int BG=Color.rgb(15,17,21), STAGE=Color.rgb(9,10,13), PANEL=Color.rgb(24,27,34), PANEL2=Color.rgb(32,36,45), TEXT=Color.rgb(243,245,247), MUTED=Color.rgb(174,182,194), BORDER=Color.rgb(52,58,70), ACCENT=Color.rgb(134,183,255), DANGER=Color.rgb(255,138,138);
-    private final Handler clock=new Handler(Looper.getMainLooper());
-    private final PolarisAlignmentCalculator calc=new PolarisAlignmentCalculator();
-    private final StringBuilder log=new StringBuilder();
-    private FrameLayout stage, videoLayer, previewBox;
-    private ReticleOverlayView reticle;
-    private Spinner refr, mon, fit;
-    private CheckBox live, lockZero, mirror, lockScale;
-    private EditText dt, lat, lon, rah, ram, ras, day, press, temp, elev;
-    private SeekBar sx, sy, sw, sh, rot, rop, vop;
-    private TextView sxv, syv, swv, shv, rv, ropv, vopv, uvcStatus, readout, debug;
-    private UvcPreviewController uvc;
-    private boolean building, applying;
-    private float sxp, syp, swp=100, shp=100, rdeg, ropp=100, vopp=100;
-    private String fitMode=FIT_COVER;
-    private final Runnable tick=new Runnable(){@Override public void run(){if(live!=null&&live.isChecked()){dt.setText(UiFormatting.formatLocalDateTime(new Date())); calculate();} clock.postDelayed(this,1000);}};
+    private MainScreenView screenView;
+    private CameraHardwareBackend cameraBackend;
+    private MainUiController uiController;
 
-    @Override protected void onCreate(Bundle b){super.onCreate(b); buildUi(); setDefaults(); loadOverlay(); wire(); calculate(); ensureUvcPreviewController(); appendDebugLog("Application launched. UVC controls are ready; refresh or connect a USB camera to query modes.");}
-    @Override protected void onResume(){super.onResume(); clock.post(tick);} @Override protected void onPause(){clock.removeCallbacks(tick); if(uvc!=null)uvc.unregister(); super.onPause();}
-    @Override protected void onDestroy(){if(uvc!=null){uvc.destroy();uvc=null;} if(reticle!=null)reticle.destroy(); super.onDestroy();}
-    @Override public void onRequestPermissionsResult(int c,String[] p,int[] r){super.onRequestPermissionsResult(c,p,r); if(c==REQ_UVC){if(r.length>0&&r[0]==PackageManager.PERMISSION_GRANTED)openUvcAfterPermission();else setUvcStatus("Camera permission denied. Android requires CAMERA permission before UVC query.");}else if(c==REQ_LOC){if(r.length>0&&r[0]==PackageManager.PERMISSION_GRANTED)fillLocation();else noteStatus("Location permission denied. Enter coordinates manually.");}}
+    @Override protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        screenView = new MainScreenView(this);
+        setContentView(screenView.root);
 
-    private void buildUi(){building=true; LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(BG); root.setPadding(dp(12),0,dp(12),0);
-        TextView title=text("Camera + native reticle overlay aligner",18,TEXT,true); title.setPadding(dp(2),dp(12),dp(2),dp(2)); root.addView(title,mw()); TextView hint=text("Connect the USB UVC camera, refresh/query devices if needed, select a stream mode, then start preview. Use alignment controls to match the video to the native reticle.",13,MUTED,false); hint.setPadding(dp(2),0,dp(2),dp(10)); root.addView(hint,mw());
-        FrameLayout wrap=new FrameLayout(this); wrap.setPadding(dp(10),dp(10),dp(10),dp(10)); wrap.setBackground(round(STAGE,BORDER,16)); root.addView(wrap,new LinearLayout.LayoutParams(-1,-2)); stage=new ReticleAspectStageLayout(this); stage.setBackgroundColor(Color.BLACK); stage.setClipChildren(true); stage.setClipToPadding(true); wrap.addView(stage,new FrameLayout.LayoutParams(-1,-2,Gravity.CENTER)); videoLayer=new FrameLayout(this); videoLayer.setBackgroundColor(Color.BLACK); videoLayer.setClipChildren(true); videoLayer.setClipToPadding(true); stage.addView(videoLayer,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER)); previewBox=new FrameLayout(this); previewBox.setBackgroundColor(Color.BLACK); previewBox.setClipChildren(true); previewBox.setClipToPadding(true); videoLayer.addView(previewBox,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER)); reticle=new ReticleOverlayView(this); stage.addView(reticle,new FrameLayout.LayoutParams(-1,-1));
-        ScrollView scroll=new ScrollView(this); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1)); LinearLayout col=new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL); col.setPadding(0,dp(12),0,dp(18)); scroll.addView(col,new ScrollView.LayoutParams(-1,-2)); LinearLayout cam=panel(); col.addView(cam,mb(12)); cameraPanel(cam); LinearLayout al=panel(); col.addView(al,mb(12)); alignmentPanel(al); LinearLayout as=panel(); col.addView(as,mb(12)); astroPanel(as); LinearLayout rd=panel(); col.addView(rd,mw()); readoutPanel(rd); setContentView(root); building=false;}
-    private void cameraPanel(LinearLayout p){p.addView(labelValue("USB OTG UVC camera","direct libuvc")); uvcStatus=area("UVC backend initializing…",false); p.addView(uvcStatus,mb(8));}
-    private void alignmentPanel(LinearLayout p){p.addView(section("Alignment")); LinearLayout fr=row(), fc=column(), cc=column(); fc.addView(label("Video fit")); fit=spinner(FITS); fc.addView(fit,mw()); fr.addView(fc,weight()); mirror=check("Mirror video"); lockScale=check("Lock width/height"); lockScale.setChecked(true); cc.addView(mirror,mw()); cc.addView(lockScale,mw()); fr.addView(cc,weight()); p.addView(fr); sx=slider(p,"Horizontal position","0%",sxv=new TextView(this)); sy=slider(p,"Vertical position","0%",syv=new TextView(this)); sw=slider(p,"Video width","100%",swv=new TextView(this)); sh=slider(p,"Video height","100%",shv=new TextView(this)); rot=slider(p,"Rotation","0°",rv=new TextView(this)); p.addView(button("Reset alignment",false,true,new View.OnClickListener(){@Override public void onClick(View v){resetAlignment();}})); p.addView(section("Visibility")); rop=slider(p,"Overlay opacity","100%",ropv=new TextView(this)); vop=slider(p,"Video opacity","100%",vopv=new TextView(this));}
-    private void astroPanel(LinearLayout p){p.addView(section("Polaris alignment")); p.addView(label("Local date/time")); LinearLayout tr=row(); dt=edit("yyyy-MM-dd HH:mm:ss",false); tr.addView(dt,weight()); tr.addView(button("Now",false,false,new View.OnClickListener(){@Override public void onClick(View v){live.setChecked(false);dt.setText(UiFormatting.formatLocalDateTime(new Date()));calculate();}}),fixed(92)); p.addView(tr); live=check("Live device time"); live.setChecked(true); p.addView(live,mw()); p.addView(label("Observer site")); LinearLayout site=row(); lat=edit("latitude +N",true); lon=edit("longitude +E",true); site.addView(lat,weight()); site.addView(lon,weight()); p.addView(site); p.addView(button("Use last known Android location",false,false,new View.OnClickListener(){@Override public void onClick(View v){requestLocation();}})); p.addView(label("Target right ascension")); LinearLayout ra=row(); rah=edit("hh",true); ram=edit("mm",true); ras=edit("ss.s",true); ra.addView(rah,weight()); ra.addView(ram,weight()); ra.addView(ras,weight()); p.addView(ra); p.addView(note("Used for the live RA → HA indicator and date-ring rotation. Polaris physical placement is calculated separately.")); p.addView(label("Month-day offset for 0h")); LinearLayout of=row(); mon=spinner(MONTHS); day=edit("day",true); of.addView(mon,weight()); of.addView(day,weight()); p.addView(of); lockZero=check("Lock visual reticle to HA 00:00:00 at 31/10"); p.addView(lockZero,mw()); p.addView(label("Atmospheric refraction")); refr=refractionSpinner(); p.addView(refr,mw()); LinearLayout atm=row(); press=edit("pressure hPa",true); temp=edit("temperature °C",true); elev=edit("elevation m",true); atm.addView(press,weight()); atm.addView(temp,weight()); atm.addView(elev,weight()); p.addView(atm); p.addView(button("Calculate alignment",true,false,new View.OnClickListener(){@Override public void onClick(View v){calculate();}}));}
-    private void readoutPanel(LinearLayout p){p.addView(section("Readouts")); readout=area("Readouts will appear here.",true); p.addView(readout,mw()); p.addView(section("Debug log")); p.addView(button("Save UVC log to Downloads",false,false,new View.OnClickListener(){@Override public void onClick(View v){saveUvcLog();}})); debug=area("",true); p.addView(debug,mw()); p.addView(note("Native Android build. USB/UVC preview uses direct libuvc; the reticle is native Canvas geometry. No WebView, SVG runtime, or Camera2 preview path is used."));}
-    private void setDefaults(){building=true; dt.setText(UiFormatting.formatLocalDateTime(new Date())); lat.setText("52.520008"); lon.setText("13.404954"); rah.setText("0"); ram.setText("0"); ras.setText("0.0"); mon.setSelection(9); day.setText("31"); press.setText("1013.25"); temp.setText("10.0"); elev.setText("0"); building=false;}
-    private void wire(){refr.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){@Override public void onItemSelected(AdapterView<?> p,View v,int pos,long id){atmState();calcIfReady();}@Override public void onNothingSelected(AdapterView<?> p){}}); mon.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){@Override public void onItemSelected(AdapterView<?> p,View v,int pos,long id){clampDay();calcIfReady();}@Override public void onNothingSelected(AdapterView<?> p){}}); fit.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){@Override public void onItemSelected(AdapterView<?> p,View v,int pos,long id){fitMode=sanitizeFit(String.valueOf(p.getItemAtPosition(pos)));applyOverlay(true);}@Override public void onNothingSelected(AdapterView<?> p){}}); CompoundButton.OnCheckedChangeListener rc=new CompoundButton.OnCheckedChangeListener(){@Override public void onCheckedChanged(CompoundButton b,boolean c){calcIfReady();}}; live.setOnCheckedChangeListener(rc); lockZero.setOnCheckedChangeListener(rc); mirror.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener(){@Override public void onCheckedChanged(CompoundButton b,boolean c){applyOverlay(true);}}); lockScale.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener(){@Override public void onCheckedChanged(CompoundButton b,boolean c){if(c)syncScale(sw);applyOverlay(true);}}); TextWatcher tw=new SimpleTextWatcher(){@Override public void afterTextChanged(Editable e){calcIfReady();}}; dt.addTextChangedListener(tw);lat.addTextChangedListener(tw);lon.addTextChangedListener(tw);rah.addTextChangedListener(tw);ram.addTextChangedListener(tw);ras.addTextChangedListener(tw);day.addTextChangedListener(tw);press.addTextChangedListener(tw);temp.addTextChangedListener(tw);elev.addTextChangedListener(tw); SeekBar.OnSeekBarChangeListener sl=new SeekBar.OnSeekBarChangeListener(){@Override public void onProgressChanged(SeekBar s,int p,boolean u){if(u&&!applying){syncScale(s);applyOverlay(true);}}@Override public void onStartTrackingTouch(SeekBar s){}@Override public void onStopTrackingTouch(SeekBar s){applyOverlay(true);}}; sx.setOnSeekBarChangeListener(sl);sy.setOnSeekBarChangeListener(sl);sw.setOnSeekBarChangeListener(sl);sh.setOnSeekBarChangeListener(sl);rot.setOnSeekBarChangeListener(sl);rop.setOnSeekBarChangeListener(sl);vop.setOnSeekBarChangeListener(sl);atmState();applyOverlay(false);}
-    private void requestCameraPermissionThenOpenUvc(){appendDebugLog("UVC query requested."); if(checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.CAMERA},REQ_UVC);return;} openUvcAfterPermission();} private void openUvcAfterPermission(){UvcPreviewController c=ensureUvcPreviewController(); if(c!=null)c.requestPermissionAndOpenFirstCamera();} private UvcPreviewController ensureUvcPreviewController(){if(uvc!=null)return uvc; try{uvc=new UvcPreviewController(this,previewBox,new UvcPreviewController.Listener(){@Override public void onUvcStatusChanged(final String s){runOnUiThread(new Runnable(){@Override public void run(){setUvcStatus(s);}});}}); uvc.setPreviewFitMode(toFit(fitMode)); return uvc;}catch(Throwable t){uvc=null;setUvcStatus("UVC backend failed to initialize: "+t.getClass().getSimpleName()+": "+t.getMessage());return null;}}
-    private void saveUvcLog(){try{UvcPreviewController c=ensureUvcPreviewController(); if(c==null)return; Method m=UvcPreviewController.class.getDeclaredMethod("saveDebugLogToDownloads"); m.setAccessible(true); m.invoke(c);}catch(Throwable t){appendDebugLog("Failed to save UVC log: "+t.getClass().getSimpleName()+": "+t.getMessage());}}
-    private void calcIfReady(){if(!building)calculate();} private void calculate(){try{clampDay(); AlignmentInput in=input(); AlignmentResult r=calc.calculate(in); reticle.setAlignmentResult(r); readout.setText(readout(r,in)); if(!r.warningText.isEmpty())noteStatus(r.warningText);}catch(Exception e){reticle.setAlignmentResult(null);noteStatus("Calculation error: "+e.getMessage());}}
-    private AlignmentInput input()throws ParseException{return new AlignmentInput(UiFormatting.parseLocalDateTime(dt.getText().toString().trim()),parseD(lat,"Latitude"),parseD(lon,"Longitude"),lockZero.isChecked()?0:raHours(),mon.getSelectedItemPosition()+1,Math.round((float)parseOpt(day,1)),lockZero.isChecked(),refrMode(),parseOpt(press,1013.25),parseOpt(temp,10),parseOpt(elev,0));} private RefractionMode refrMode(){RefractionMode r=(RefractionMode)refr.getSelectedItem();return r==null?RefractionMode.FIXED_BENNETT:r;} private double raHours(){double h=parseOpt(rah,Double.NaN),m=parseOpt(ram,Double.NaN),s=parseOpt(ras,Double.NaN); if(!Double.isFinite(h)||!Double.isFinite(m)||!Double.isFinite(s)||h<0||h>=24||m<0||m>=60||s<0||s>=60)throw new IllegalArgumentException("Target RA must be valid hh/mm/ss."); return h+m/60+s/3600;}
-    private String readout(AlignmentResult r,AlignmentInput in){return "UTC JD: "+String.format(Locale.US,"%.6f",r.julianDateUtc)+'\n'+"LAST: "+UiFormatting.formatHours(r.localApparentSiderealTimeDegrees/15)+" ("+String.format(Locale.US,"%.5f°",r.localApparentSiderealTimeDegrees)+")\n"+"LMST: "+UiFormatting.formatHours(r.localMeanSiderealTimeDegrees/15)+" ("+String.format(Locale.US,"%.5f°",r.localMeanSiderealTimeDegrees)+")\n"+"Target HA: "+UiFormatting.formatHours(r.activeHourAngleHours)+" ("+String.format(Locale.US,"%.4f°",r.activeHourAngleDegrees)+")"+(in.lockReticleToZeroHourAngle?" — locked; live calculated HA "+UiFormatting.formatHours(r.calculatedTargetHourAngleHours)+" ("+String.format(Locale.US,"%.4f°",r.calculatedTargetHourAngleDegrees)+")":"")+'\n'+"0h date label: "+String.format(Locale.US,"%02d/%02d",r.zeroHourDateDay,r.zeroHourDateMonth)+" ("+MONTHS[r.zeroHourDateMonth-1]+")\n"+"Date/polar reticle rotation: "+String.format(Locale.US,"%.4f°",r.dateAndPolarReticleRotationDegrees)+'\n'+"Polaris RA/Dec: "+UiFormatting.formatRightAscension(r.apparentRightAscensionRadians)+" / "+UiFormatting.formatDeclination(r.apparentDeclinationRadians)+'\n'+"Polaris clock: "+UiFormatting.formatHours(r.polarisClockAngleDegrees/15)+" ("+String.format(Locale.US,"%.3f°",r.polarisClockAngleDegrees)+")\n"+"Alt/Az: "+UiFormatting.formatDegrees(r.trueAltitudeRadians,3)+" / "+UiFormatting.formatDegrees(r.trueAzimuthRadians,3)+'\n'+"Refraction: "+String.format(Locale.US,"%.3f′ (%s)",r.refractionArcMinutes,r.refractionDescription)+'\n'+"Marker reticle: x="+String.format(Locale.US,"%.2f",r.markerReticleX)+", y="+String.format(Locale.US,"%.2f",r.markerReticleY)+'\n'+"Ring scale: "+String.format(Locale.US,"%.2f px, %.1f px/tan-rad",r.nominalRingRadiusReticlePixels,r.pixelPerTangentRadian)+'\n'+"ΔT: "+String.format(Locale.US,"%.2f s",r.deltaTSeconds);}
-    private void requestLocation(){if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED&&checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION},REQ_LOC);return;}fillLocation();} private void fillLocation(){LocationManager lm=(LocationManager)getSystemService(Context.LOCATION_SERVICE); if(lm==null){noteStatus("Location service is unavailable. Enter coordinates manually.");return;} if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED&&checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)!=PackageManager.PERMISSION_GRANTED){noteStatus("Location permission is required. Enter coordinates manually or grant permission.");return;} Location best=null; for(String p:lm.getProviders(true)){Location c=lm.getLastKnownLocation(p); if(c!=null&&(best==null||c.getAccuracy()<best.getAccuracy()))best=c;} if(best==null){noteStatus("No last known location. Enable location or enter coordinates manually.");return;} lat.setText(String.format(Locale.US,"%.6f",best.getLatitude())); lon.setText(String.format(Locale.US,"%.6f",best.getLongitude())); if(best.hasAltitude())elev.setText(String.format(Locale.US,"%.0f",best.getAltitude())); noteStatus("Filled last known Android location. Verify coordinates before alignment.");calculate();}
-    private void applyOverlay(boolean save){if(videoLayer==null||applying)return; sxp=signed(sx);syp=signed(sy);swp=size(sw);shp=size(sh);rdeg=deg(rot);ropp=rop.getProgress();vopp=vop.getProgress();fitMode=sanitizeFit(fitMode);labels();layoutVideo();if(uvc!=null)uvc.setPreviewFitMode(toFit(fitMode));if(save)saveOverlay();} private void layoutVideo(){if(stage.getWidth()<=0||stage.getHeight()<=0){stage.post(new Runnable(){@Override public void run(){layoutVideo();}});return;} int w=Math.max(1,Math.round(stage.getWidth()*swp/100)),h=Math.max(1,Math.round(stage.getHeight()*shp/100));FrameLayout.LayoutParams lp=(FrameLayout.LayoutParams)videoLayer.getLayoutParams();if(lp.width!=w||lp.height!=h||lp.gravity!=Gravity.CENTER){lp.width=w;lp.height=h;lp.gravity=Gravity.CENTER;videoLayer.setLayoutParams(lp);}videoLayer.setTranslationX(stage.getWidth()*sxp/100);videoLayer.setTranslationY(stage.getHeight()*syp/100);videoLayer.setRotation(rdeg);videoLayer.setAlpha(vopp/100);previewBox.setScaleX(mirror.isChecked()?-1:1);previewBox.setScaleY(1);reticle.setAlpha(ropp/100);} private void resetAlignment(){applying=true;sx.setProgress(signedP(0));sy.setProgress(signedP(0));sw.setProgress(sizeP(100));sh.setProgress(sizeP(100));rot.setProgress(rotP(0));rop.setProgress(100);vop.setProgress(100);mirror.setChecked(false);lockScale.setChecked(true);fitMode=FIT_COVER;select(fit,fitMode);applying=false;applyOverlay(true);appendDebugLog("Video/overlay alignment reset.");}
-    private void syncScale(SeekBar s){if(lockScale.isChecked()){if(s==sw)sh.setProgress(sw.getProgress());else if(s==sh)sw.setProgress(sh.getProgress());}} private void labels(){sxv.setText(String.format(Locale.US,"%.1f%%",sxp));syv.setText(String.format(Locale.US,"%.1f%%",syp));swv.setText(String.format(Locale.US,"%.1f%%",swp));shv.setText(String.format(Locale.US,"%.1f%%",shp));rv.setText(String.format(Locale.US,"%.1f°",rdeg));ropv.setText(String.format(Locale.US,"%.0f%%",ropp));vopv.setText(String.format(Locale.US,"%.0f%%",vopp));}
-    private void loadOverlay(){SharedPreferences p=getSharedPreferences(SETTINGS,MODE_PRIVATE);sxp=p.getFloat("videoOffsetXPercent",0);syp=p.getFloat("videoOffsetYPercent",0);swp=p.getFloat("videoWidthPercent",100);shp=p.getFloat("videoHeightPercent",100);rdeg=p.getFloat("videoRotationDegrees",0);ropp=p.getFloat("reticleOpacityPercent",100);vopp=p.getFloat("videoOpacityPercent",100);boolean mir=p.getBoolean("mirrorVideo",false),lock=p.getBoolean("lockVideoScale",true);fitMode=sanitizeFit(p.getString("videoFitMode",FIT_COVER));if(lock)shp=swp;applying=true;mirror.setChecked(mir);lockScale.setChecked(lock);select(fit,fitMode);sx.setProgress(signedP(sxp));sy.setProgress(signedP(syp));sw.setProgress(sizeP(swp));sh.setProgress(sizeP(shp));rot.setProgress(rotP(rdeg));rop.setProgress(Math.round(ropp));vop.setProgress(Math.round(vopp));applying=false;applyOverlay(false);} private void saveOverlay(){getSharedPreferences(SETTINGS,MODE_PRIVATE).edit().putFloat("videoOffsetXPercent",sxp).putFloat("videoOffsetYPercent",syp).putFloat("videoWidthPercent",swp).putFloat("videoHeightPercent",shp).putFloat("videoRotationDegrees",rdeg).putFloat("reticleOpacityPercent",ropp).putFloat("videoOpacityPercent",vopp).putBoolean("mirrorVideo",mirror.isChecked()).putBoolean("lockVideoScale",lockScale.isChecked()).putString("videoFitMode",fitMode).apply();}
-    private void setUvcStatus(String s){if(uvcStatus!=null)uvcStatus.setText(s==null?"":s);appendDebugLog(s==null?"UVC status cleared.":s);} private void noteStatus(String s){appendDebugLog(s);} private void appendDebugLog(String m){if(debug==null||m==null||m.trim().isEmpty())return;log.append(String.format(Locale.US,"[%tT] %s\n",new Date(),m.trim()));if(log.length()>9000)log.delete(0,log.length()-9000);debug.setText(log.toString().trim());}
-    private void clampDay(){int m=mon.getSelectedItemPosition()+1;if(m<1||m>12)return;String raw=day.getText().toString().trim();if(raw.isEmpty())return;try{String v=String.valueOf(Math.max(1,Math.min(MDAYS[m-1],Math.round(Float.parseFloat(raw)))));if(!v.equals(raw)){day.setText(v);day.setSelection(day.getText().length());}}catch(NumberFormatException ignored){}} private void atmState(){RefractionMode m=(RefractionMode)refr.getSelectedItem();press.setEnabled(m==RefractionMode.SCALED_PRESSURE_TEMPERATURE);temp.setEnabled(m==RefractionMode.SCALED_PRESSURE_TEMPERATURE||m==RefractionMode.ALTITUDE_PRESSURE_TEMPERATURE);elev.setEnabled(m==RefractionMode.ALTITUDE_PRESSURE_TEMPERATURE);} private static double parseD(EditText e,String n){String s=e.getText().toString().trim();if(s.isEmpty())throw new IllegalArgumentException(n+" is required.");try{return Double.parseDouble(s);}catch(NumberFormatException ex){throw new IllegalArgumentException(n+" must be a valid number.");}} private static double parseOpt(EditText e,double f){String s=e.getText().toString().trim();if(s.isEmpty())return f;try{return Double.parseDouble(s);}catch(NumberFormatException ex){return f;}}
-    private String sanitizeFit(String s){if(FIT_CONTAIN.equals(s))return FIT_CONTAIN;if(FIT_STRETCH.equals(s)||"Fill / stretch".equals(s)||"fill".equals(s))return FIT_STRETCH;return FIT_COVER;} private UvcPreviewController.PreviewFitMode toFit(String s){String f=sanitizeFit(s);return FIT_CONTAIN.equals(f)?UvcPreviewController.PreviewFitMode.CONTAIN:FIT_STRETCH.equals(f)?UvcPreviewController.PreviewFitMode.STRETCH:UvcPreviewController.PreviewFitMode.COVER;} private int signedP(float p){return Math.max(0,Math.min(2000,Math.round((p+100)*10)));} private float signed(SeekBar s){return s.getProgress()/10f-100;} private int sizeP(float p){return Math.max(0,Math.min(2800,Math.round((p-20)*10)));} private float size(SeekBar s){return 20+s.getProgress()/10f;} private int rotP(float d){return Math.max(0,Math.min(3600,Math.round((d+180)*10)));} private float deg(SeekBar s){return s.getProgress()/10f-180;}
-    private LinearLayout panel(){LinearLayout p=new LinearLayout(this);p.setOrientation(LinearLayout.VERTICAL);p.setPadding(dp(12),dp(12),dp(12),dp(12));p.setBackground(round(PANEL,BORDER,16));return p;} private LinearLayout row(){LinearLayout r=new LinearLayout(this);r.setOrientation(LinearLayout.HORIZONTAL);r.setGravity(Gravity.CENTER_VERTICAL);r.setPadding(0,dp(4),0,dp(4));return r;} private LinearLayout column(){LinearLayout c=new LinearLayout(this);c.setOrientation(LinearLayout.VERTICAL);c.setPadding(dp(2),dp(2),dp(2),dp(2));return c;} private TextView text(String s,int sp,int c,boolean b){TextView t=new TextView(this);t.setText(s);t.setTextColor(c);t.setTextSize(sp);t.setLineSpacing(0,1.08f);t.setGravity(Gravity.START);t.setTypeface(Typeface.DEFAULT,b?Typeface.BOLD:Typeface.NORMAL);return t;} private TextView label(String s){TextView t=text(s,13,MUTED,false);t.setPadding(dp(2),dp(4),dp(2),dp(2));return t;} private TextView note(String s){TextView t=text(s,12,MUTED,false);t.setPadding(0,dp(4),0,dp(8));return t;} private TextView section(String s){TextView t=text(s.toUpperCase(Locale.US),13,TEXT,true);t.setLetterSpacing(0.03f);t.setPadding(dp(2),dp(10),dp(2),dp(2));return t;} private View labelValue(String l,String r){LinearLayout x=row();TextView rv=text(r,13,TEXT,false);rv.setGravity(Gravity.END);x.addView(label(l),weight());x.addView(rv,weight());return x;}
-    private EditText edit(String h,boolean num){EditText e=new EditText(this);e.setHint(h);e.setSingleLine(true);e.setTextColor(TEXT);e.setHintTextColor(Color.rgb(128,132,140));e.setTextSize(15);e.setPadding(dp(10),dp(8),dp(10),dp(8));e.setBackground(round(PANEL2,BORDER,10));if(num)e.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL|InputType.TYPE_NUMBER_FLAG_SIGNED);return e;} private Button button(String s,boolean prim,boolean danger,View.OnClickListener l){Button b=new Button(this);b.setAllCaps(false);b.setText(s);b.setTextSize(15);b.setMinHeight(dp(42));b.setGravity(Gravity.CENTER);b.setPadding(dp(10),dp(8),dp(10),dp(8));b.setOnClickListener(l);if(prim){b.setTextColor(Color.rgb(6,16,31));b.setBackground(round(ACCENT,Color.TRANSPARENT,10));}else if(danger){b.setTextColor(DANGER);b.setBackground(round(Color.TRANSPARENT,Color.argb(120,255,138,138),10));}else{b.setTextColor(TEXT);b.setBackground(round(PANEL2,BORDER,10));}return b;} private CheckBox check(String s){CheckBox c=new CheckBox(this);c.setText(s);c.setTextColor(TEXT);c.setTextSize(14);c.setPadding(0,dp(4),0,dp(4));return c;} private Spinner spinner(String[] a){Spinner s=new Spinner(this);ArrayAdapter<String> ad=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,a);ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);s.setAdapter(ad);s.setBackground(round(PANEL2,BORDER,10));s.setPadding(dp(4),0,dp(4),0);return s;} private Spinner refractionSpinner(){Spinner s=new Spinner(this);ArrayAdapter<RefractionMode>a=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,RefractionMode.values());a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);s.setAdapter(a);s.setSelection(0);s.setBackground(round(PANEL2,BORDER,10));s.setPadding(dp(4),0,dp(4),0);return s;} private TextView area(String s,boolean mono){TextView t=text(s,12,(s==null||s.isEmpty())?MUTED:TEXT,false);t.setPadding(dp(10),dp(9),dp(10),dp(9));t.setBackground(round(Color.rgb(17,20,26),BORDER,10));if(mono)t.setTypeface(Typeface.MONOSPACE,Typeface.NORMAL);return t;}
-    private SeekBar slider(LinearLayout p,String lbl,String init,TextView val){LinearLayout r=row();val.setText(init);val.setTextColor(TEXT);val.setTextSize(13);val.setGravity(Gravity.END);r.addView(label(lbl),weight());r.addView(val,weight());p.addView(r,mw());SeekBar s=new SeekBar(this);s.setPadding(0,0,0,dp(6));if(lbl.equals("Horizontal position")||lbl.equals("Vertical position")){s.setMax(2000);s.setProgress(1000);}else if(lbl.equals("Video width")||lbl.equals("Video height")){s.setMax(2800);s.setProgress(800);}else if(lbl.equals("Rotation")){s.setMax(3600);s.setProgress(1800);}else{s.setMax(100);s.setProgress(100);}p.addView(s,mw());return s;} private GradientDrawable round(int fill,int stroke,int c){GradientDrawable d=new GradientDrawable();d.setShape(GradientDrawable.RECTANGLE);d.setColor(fill);d.setCornerRadius(dp(c));if(stroke!=Color.TRANSPARENT)d.setStroke(dp(1),stroke);return d;} private LinearLayout.LayoutParams mw(){return new LinearLayout.LayoutParams(-1,-2);} private LinearLayout.LayoutParams mb(int b){LinearLayout.LayoutParams p=mw();p.setMargins(0,0,0,dp(b));return p;} private LinearLayout.LayoutParams weight(){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-2,1);p.setMargins(dp(3),dp(3),dp(3),dp(3));return p;} private LinearLayout.LayoutParams fixed(int w){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(w),-2);p.setMargins(dp(3),dp(3),dp(3),dp(3));return p;} private void select(Spinner s,String want){for(int i=0;s!=null&&i<s.getCount();i++)if(want.equals(String.valueOf(s.getItemAtPosition(i)))){s.setSelection(i);return;}if(s!=null)s.setSelection(0);} private int dp(int v){return Math.round(v*getResources().getDisplayMetrics().density);} private abstract static class SimpleTextWatcher implements TextWatcher{@Override public void beforeTextChanged(CharSequence s,int a,int b,int c){}@Override public void onTextChanged(CharSequence s,int a,int b,int c){}}
-    private static final class ReticleAspectStageLayout extends FrameLayout{private static final double R=PolarisAlignmentCalculator.RETICLE_VIEWBOX_HEIGHT/PolarisAlignmentCalculator.RETICLE_VIEWBOX_WIDTH;ReticleAspectStageLayout(Context c){super(c);}@Override protected void onMeasure(int w,int h){int aw=MeasureSpec.getSize(w);super.onMeasure(w,MeasureSpec.makeMeasureSpec((int)Math.round(aw*R),MeasureSpec.EXACTLY));}}
+        cameraBackend = new CameraHardwareBackend(this, screenView.previewTextureView, null);
+        uiController = new MainUiController(
+                this,
+                screenView,
+                cameraBackend,
+                new VideoAlignmentBackend(),
+                new PolarisAlignmentBackend()
+        );
+        cameraBackend.setListener(uiController);
+        uiController.initialize();
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (uiController != null) uiController.onResume();
+    }
+
+    @Override protected void onPause() {
+        if (uiController != null) uiController.onPause();
+        super.onPause();
+    }
+
+    @Override protected void onDestroy() {
+        if (uiController != null) {
+            uiController.onDestroy();
+            uiController = null;
+        }
+        cameraBackend = null;
+        screenView = null;
+        super.onDestroy();
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (uiController == null) return;
+        if (requestCode == MainUiController.REQUEST_CAMERA_PERMISSION_FOR_UVC) {
+            if (grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) uiController.onCameraPermissionGranted();
+            else uiController.onCameraPermissionDenied();
+        } else if (requestCode == MainUiController.REQUEST_LOCATION_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) uiController.onLocationPermissionGranted();
+            else uiController.onLocationPermissionDenied();
+        }
+    }
+
+    /** Called by PolarisApplication for automatic USB-query on app start/attach. */
+    private void requestCameraPermissionThenOpenUvc() {
+        if (uiController != null) uiController.requestCameraPermissionThenOpenUvc();
+    }
+
+    /** Called by PolarisApplication to ensure buttons/panels exist before auto-query. */
+    private void ensureUvcPreviewController() {
+        if (uiController == null && screenView != null && cameraBackend != null) {
+            uiController = new MainUiController(this, screenView, cameraBackend, new VideoAlignmentBackend(), new PolarisAlignmentBackend());
+            cameraBackend.setListener(uiController);
+            uiController.initialize();
+        }
+    }
+
+    /** Called reflectively by PolarisApplication for USB attach diagnostics. */
+    private void setUvcStatus(String statusText) {
+        if (uiController != null) uiController.onCameraStatusChanged(statusText);
+    }
+
+    /** Called reflectively by PolarisApplication for USB attach diagnostics. */
+    private void appendDebugLog(String message) {
+        if (uiController != null) uiController.onCameraStatusChanged(message);
+    }
 }
