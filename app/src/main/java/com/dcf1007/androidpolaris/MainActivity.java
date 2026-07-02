@@ -26,7 +26,15 @@ public final class MainActivity extends Activity {
         screenView = new MainScreenView(this);
         setContentView(screenView.root);
 
-        cameraBackend = new CameraHardwareBackend(this, screenView.previewTextureView, null);
+        final MainUiController[] controllerHolder = new MainUiController[1];
+        cameraBackend = new CameraHardwareBackend(this, screenView.previewTextureView, new CameraHardwareBackend.Listener() {
+            @Override public void onCameraStatusChanged(String statusText) {
+                if (controllerHolder[0] != null) controllerHolder[0].onCameraStatusChanged(statusText);
+            }
+            @Override public void onCameraCapabilitiesChanged(CameraHardwareBackend.Capabilities capabilities) {
+                if (controllerHolder[0] != null) controllerHolder[0].onCameraCapabilitiesChanged(capabilities);
+            }
+        });
         uiController = new MainUiController(
                 this,
                 screenView,
@@ -34,7 +42,7 @@ public final class MainActivity extends Activity {
                 new VideoAlignmentBackend(),
                 new PolarisAlignmentBackend()
         );
-        cameraBackend.setListener(uiController);
+        controllerHolder[0] = uiController;
         uiController.initialize();
     }
 
@@ -77,11 +85,8 @@ public final class MainActivity extends Activity {
 
     /** Called by PolarisApplication to ensure buttons/panels exist before auto-query. */
     private void ensureUvcPreviewController() {
-        if (uiController == null && screenView != null && cameraBackend != null) {
-            uiController = new MainUiController(this, screenView, cameraBackend, new VideoAlignmentBackend(), new PolarisAlignmentBackend());
-            cameraBackend.setListener(uiController);
-            uiController.initialize();
-        }
+        // The UI controller is created during onCreate. This method remains for the app-level
+        // auto-query hook and intentionally has no extra layout or backend work to do.
     }
 
     /** Called reflectively by PolarisApplication for USB attach diagnostics. */
