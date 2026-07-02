@@ -8,7 +8,6 @@ import android.util.AttributeSet;
 import android.view.View;
 
 import com.dcf1007.androidpolaris.backend.PolarisBackend;
-import com.dcf1007.androidpolaris.model.AlignmentResult;
 import com.dcf1007.androidpolaris.view.reticle.NativeCanvasReticle;
 import com.dcf1007.androidpolaris.view.reticle.NativeReticleGeometry;
 
@@ -27,7 +26,7 @@ public class ReticleOverlayView extends View {
     );
 
     private final NativeCanvasReticle.Group reticleRoot = NativeReticleGeometry.createReticle();
-    private AlignmentResult alignmentResult;
+    private PolarisBackend.AlignmentResult alignmentResult;
 
     public ReticleOverlayView(Context context) {
         super(context);
@@ -43,7 +42,7 @@ public class ReticleOverlayView extends View {
         alignmentResult = null;
     }
 
-    public void setAlignmentResult(AlignmentResult alignmentResult) {
+    public void setAlignmentResult(PolarisBackend.AlignmentResult alignmentResult) {
         this.alignmentResult = alignmentResult;
         invalidate();
     }
