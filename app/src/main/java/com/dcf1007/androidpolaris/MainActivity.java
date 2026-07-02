@@ -83,12 +83,6 @@ public final class MainActivity extends Activity {
         if (uiController != null) uiController.requestCameraPermissionThenOpenUvc();
     }
 
-    /** Called by PolarisApplication to ensure buttons/panels exist before auto-query. */
-    private void ensureUvcPreviewController() {
-        // The UI controller is created during onCreate. This method remains for the app-level
-        // auto-query hook and intentionally has no extra layout or backend work to do.
-    }
-
     /** Called reflectively by PolarisApplication for USB attach diagnostics. */
     private void setUvcStatus(String statusText) {
         if (uiController != null) uiController.onCameraStatusChanged(statusText);
