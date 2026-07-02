@@ -10,7 +10,7 @@ import android.os.Build;
 import android.os.Bundle;
 
 import com.dcf1007.androidpolaris.backend.CameraHardwareBackend;
-import com.dcf1007.androidpolaris.backend.PolarisBackend;
+import com.dcf1007.androidpolaris.backend.PolarisAlignmentBackend;
 import com.dcf1007.androidpolaris.backend.VideoAlignmentBackend;
 import com.dcf1007.androidpolaris.ui.MainScreenView;
 import com.dcf1007.androidpolaris.ui.MainUiController;
@@ -36,7 +36,7 @@ public final class MainActivity extends Activity {
                 if (controllerHolder[0] != null) controllerHolder[0].onCameraCapabilitiesChanged(capabilities);
             }
         });
-        uiController = new MainUiController(this, screenView, cameraBackend, new VideoAlignmentBackend(), new PolarisBackend());
+        uiController = new MainUiController(this, screenView, cameraBackend, new VideoAlignmentBackend(), new PolarisAlignmentBackend());
         controllerHolder[0] = uiController;
         uiController.initialize();
         registerUsbAttachReceiver();
