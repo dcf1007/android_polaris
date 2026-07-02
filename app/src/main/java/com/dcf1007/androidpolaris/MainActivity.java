@@ -10,19 +10,11 @@ import android.os.Build;
 import android.os.Bundle;
 
 import com.dcf1007.androidpolaris.backend.CameraHardwareBackend;
-import com.dcf1007.androidpolaris.backend.PolarisAlignmentBackend;
+import com.dcf1007.androidpolaris.backend.PolarisBackend;
 import com.dcf1007.androidpolaris.backend.VideoAlignmentBackend;
 import com.dcf1007.androidpolaris.ui.MainScreenView;
 import com.dcf1007.androidpolaris.ui.MainUiController;
 
-/**
- * Android composition root for the app.
- *
- * <p>MainActivity owns Activity lifecycle, Android permission callbacks and Android USB attach
- * broadcasts. It creates the screen UI, creates the backend objects, and wires them through
- * MainUiController. UI construction, UI state mutation, USB/libuvc execution, overlay state, and
- * Polaris calculations live in separate files.</p>
- */
 public final class MainActivity extends Activity {
     private MainScreenView screenView;
     private CameraHardwareBackend cameraBackend;
@@ -35,7 +27,6 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         screenView = new MainScreenView(this);
         setContentView(screenView.root);
-
         final MainUiController[] controllerHolder = new MainUiController[1];
         cameraBackend = new CameraHardwareBackend(this, screenView.previewTextureView, new CameraHardwareBackend.Listener() {
             @Override public void onCameraStatusChanged(String statusText) {
@@ -45,13 +36,7 @@ public final class MainActivity extends Activity {
                 if (controllerHolder[0] != null) controllerHolder[0].onCameraCapabilitiesChanged(capabilities);
             }
         });
-        uiController = new MainUiController(
-                this,
-                screenView,
-                cameraBackend,
-                new VideoAlignmentBackend(),
-                new PolarisAlignmentBackend()
-        );
+        uiController = new MainUiController(this, screenView, cameraBackend, new VideoAlignmentBackend(), new PolarisBackend());
         controllerHolder[0] = uiController;
         uiController.initialize();
         registerUsbAttachReceiver();
@@ -81,14 +66,15 @@ public final class MainActivity extends Activity {
         super.onDestroy();
     }
 
-    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    @Override public void onRequestPermissionsResult(int requestCode, String[] ignoredPermissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, ignoredPermissions, grantResults);
         if (uiController == null) return;
+        boolean granted = grantResults.length > 0 && grantResults[0] == 0;
         if (requestCode == MainUiController.REQUEST_CAMERA_PERMISSION_FOR_UVC) {
-            if (grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) uiController.onCameraPermissionGranted();
+            if (granted) uiController.onCameraPermissionGranted();
             else uiController.onCameraPermissionDenied();
         } else if (requestCode == MainUiController.REQUEST_LOCATION_PERMISSION) {
-            if (grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) uiController.onLocationPermissionGranted();
+            if (granted) uiController.onLocationPermissionGranted();
             else uiController.onLocationPermissionDenied();
         }
     }
