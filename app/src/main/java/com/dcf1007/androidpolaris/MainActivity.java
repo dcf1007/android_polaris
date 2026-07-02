@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.hardware.usb.UsbManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -69,7 +70,7 @@ public final class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int requestCode, String[] ignoredPermissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, ignoredPermissions, grantResults);
         if (uiController == null) return;
-        boolean granted = grantResults.length > 0 && grantResults[0] == 0;
+        boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
         if (requestCode == MainUiController.REQUEST_CAMERA_PERMISSION_FOR_UVC) {
             if (granted) uiController.onCameraPermissionGranted();
             else uiController.onCameraPermissionDenied();
