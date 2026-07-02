@@ -1,4 +1,4 @@
-package com.dcf1007.androidpolaris.view.reticle;
+package com.dcf1007.androidpolaris.ui.reticle;
 
 import android.graphics.Canvas;
 import android.graphics.Color;
