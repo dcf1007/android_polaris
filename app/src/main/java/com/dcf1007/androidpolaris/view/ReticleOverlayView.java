@@ -1,92 +1,19 @@
 package com.dcf1007.androidpolaris.view;
 
 import android.content.Context;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.RectF;
 import android.util.AttributeSet;
-import android.view.View;
-
-import com.dcf1007.androidpolaris.astro.PolarisAlignmentCalculator;
-import com.dcf1007.androidpolaris.model.AlignmentResult;
-import com.dcf1007.androidpolaris.view.reticle.NativeCanvasReticle;
-import com.dcf1007.androidpolaris.view.reticle.NativeReticleGeometry;
 
 /**
- * Native reticle overlay drawn above the UVC video preview.
- *
- * <p>The reticle is a Java object tree of Android Canvas primitives. It preserves the source
- * hierarchy, drawing order, coordinates, colors, stroke widths and text labels, but no vector asset,
- * parser or WebView is present at runtime. Dynamic groups are transformed using the current
- * {@link AlignmentResult}.</p>
+ * Compatibility wrapper while MainScreenView is migrated to ui.ReticleOverlayView.
+ * The implementation now lives in the UI layer.
  */
-public final class ReticleOverlayView extends View {
-    private static final RectF RETICLE_DESIGN_BOUNDS = new RectF(0.0f, 0.0f,
-            (float) PolarisAlignmentCalculator.RETICLE_VIEWBOX_WIDTH,
-            (float) PolarisAlignmentCalculator.RETICLE_VIEWBOX_HEIGHT);
-
-    private final NativeCanvasReticle.Group reticleRoot = NativeReticleGeometry.createReticle();
-    private AlignmentResult alignmentResult;
-
+@Deprecated
+public final class ReticleOverlayView extends com.dcf1007.androidpolaris.ui.ReticleOverlayView {
     public ReticleOverlayView(Context context) {
         super(context);
-        initialize();
     }
 
     public ReticleOverlayView(Context context, AttributeSet attrs) {
         super(context, attrs);
-        initialize();
-    }
-
-    public void destroy() {
-        alignmentResult = null;
-    }
-
-    public void setAlignmentResult(AlignmentResult alignmentResult) {
-        this.alignmentResult = alignmentResult;
-        invalidate();
-    }
-
-    private void initialize() {
-        setWillNotDraw(false);
-        setBackgroundColor(Color.TRANSPARENT);
-    }
-
-    @Override
-    protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
-        ViewportTransform transform = computeViewportTransform();
-        if (transform.scale <= 0.0f) return;
-
-        canvas.save();
-        canvas.translate(transform.offsetX, transform.offsetY);
-        canvas.scale(transform.scale, transform.scale);
-        reticleRoot.draw(canvas, new NativeCanvasReticle.RenderContext(alignmentResult));
-        canvas.restore();
-    }
-
-    /**
-     * Fit the reticle design-space inside this Android view without stretching.
-     *
-     * <p>This preserves reticle proportions and keeps the overlay geometrically aligned with the
-     * camera preview instead of forcing a different aspect ratio.</p>
-     */
-    private ViewportTransform computeViewportTransform() {
-        float scale = (float) Math.min(getWidth() / RETICLE_DESIGN_BOUNDS.width(), getHeight() / RETICLE_DESIGN_BOUNDS.height());
-        float usedWidth = RETICLE_DESIGN_BOUNDS.width() * scale;
-        float usedHeight = RETICLE_DESIGN_BOUNDS.height() * scale;
-        return new ViewportTransform(scale, (getWidth() - usedWidth) / 2.0f, (getHeight() - usedHeight) / 2.0f);
-    }
-
-    private static final class ViewportTransform {
-        final float scale;
-        final float offsetX;
-        final float offsetY;
-
-        ViewportTransform(float scale, float offsetX, float offsetY) {
-            this.scale = scale;
-            this.offsetX = offsetX;
-            this.offsetY = offsetY;
-        }
     }
 }
