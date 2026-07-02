@@ -1,6 +1,12 @@
 package com.dcf1007.androidpolaris;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.hardware.usb.UsbManager;
+import android.os.Build;
 import android.os.Bundle;
 
 import com.dcf1007.androidpolaris.backend.CameraHardwareBackend;
@@ -12,14 +18,18 @@ import com.dcf1007.androidpolaris.ui.MainUiController;
 /**
  * Android composition root for the app.
  *
- * <p>MainActivity owns Android lifecycle and permission callbacks. It creates the screen UI, creates
- * the backend objects, and wires them through MainUiController. UI construction, UI state mutation,
- * USB/libuvc execution, overlay state, and Polaris calculations live in separate files.</p>
+ * <p>MainActivity owns Activity lifecycle, Android permission callbacks and Android USB attach
+ * broadcasts. It creates the screen UI, creates the backend objects, and wires them through
+ * MainUiController. UI construction, UI state mutation, USB/libuvc execution, overlay state, and
+ * Polaris calculations live in separate files.</p>
  */
 public final class MainActivity extends Activity {
     private MainScreenView screenView;
     private CameraHardwareBackend cameraBackend;
     private MainUiController uiController;
+    private BroadcastReceiver usbAttachReceiver;
+    private boolean usbAttachReceiverRegistered;
+    private boolean automaticUsbQueryAlreadyTriggered;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -44,19 +54,24 @@ public final class MainActivity extends Activity {
         );
         controllerHolder[0] = uiController;
         uiController.initialize();
+        registerUsbAttachReceiver();
+        maybeAutoQueryAttachedUsb(false);
     }
 
     @Override protected void onResume() {
         super.onResume();
         if (uiController != null) uiController.onResume();
+        maybeAutoQueryAttachedUsb(false);
     }
 
     @Override protected void onPause() {
         if (uiController != null) uiController.onPause();
+        automaticUsbQueryAlreadyTriggered = false;
         super.onPause();
     }
 
     @Override protected void onDestroy() {
+        unregisterUsbAttachReceiver();
         if (uiController != null) {
             uiController.onDestroy();
             uiController = null;
@@ -78,18 +93,38 @@ public final class MainActivity extends Activity {
         }
     }
 
-    /** Called by PolarisApplication for automatic USB-query on app start/attach. */
-    private void requestCameraPermissionThenOpenUvc() {
-        if (uiController != null) uiController.requestCameraPermissionThenOpenUvc();
+    private void registerUsbAttachReceiver() {
+        if (usbAttachReceiverRegistered) return;
+        usbAttachReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) {
+                if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) maybeAutoQueryAttachedUsb(true);
+            }
+        };
+        IntentFilter filter = new IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) registerReceiver(usbAttachReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(usbAttachReceiver, filter);
+        usbAttachReceiverRegistered = true;
     }
 
-    /** Called reflectively by PolarisApplication for USB attach diagnostics. */
-    private void setUvcStatus(String statusText) {
-        if (uiController != null) uiController.onCameraStatusChanged(statusText);
+    private void unregisterUsbAttachReceiver() {
+        if (!usbAttachReceiverRegistered || usbAttachReceiver == null) return;
+        try { unregisterReceiver(usbAttachReceiver); }
+        catch (Throwable ignored) { }
+        usbAttachReceiverRegistered = false;
+        usbAttachReceiver = null;
     }
 
-    /** Called reflectively by PolarisApplication for USB attach diagnostics. */
-    private void appendDebugLog(String message) {
-        if (uiController != null) uiController.onCameraStatusChanged(message);
+    private void maybeAutoQueryAttachedUsb(boolean forceQuery) {
+        if (uiController == null) return;
+        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        boolean hasUsbDevice = usbManager != null && !usbManager.getDeviceList().isEmpty();
+        if (!hasUsbDevice) {
+            automaticUsbQueryAlreadyTriggered = false;
+            return;
+        }
+        if (!forceQuery && automaticUsbQueryAlreadyTriggered) return;
+        automaticUsbQueryAlreadyTriggered = true;
+        uiController.onCameraStatusChanged("Raw USB device detected. Passing candidate to libuvc query path.");
+        uiController.requestCameraPermissionThenOpenUvc();
     }
 }
