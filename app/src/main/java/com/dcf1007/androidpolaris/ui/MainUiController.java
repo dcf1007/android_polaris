@@ -17,14 +17,11 @@ import android.widget.ArrayAdapter;
 import android.widget.CompoundButton;
 import android.widget.FrameLayout;
 import android.widget.SeekBar;
+import android.widget.Spinner;
 
 import com.dcf1007.androidpolaris.backend.CameraHardwareBackend;
-import com.dcf1007.androidpolaris.backend.PolarisAlignmentBackend;
+import com.dcf1007.androidpolaris.backend.PolarisBackend;
 import com.dcf1007.androidpolaris.backend.VideoAlignmentBackend;
-import com.dcf1007.androidpolaris.model.AlignmentInput;
-import com.dcf1007.androidpolaris.model.AlignmentResult;
-import com.dcf1007.androidpolaris.model.RefractionMode;
-import com.dcf1007.androidpolaris.util.UiFormatting;
 
 import java.util.ArrayList;
 import java.util.Date;
@@ -32,11 +29,11 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Single UI controller for the whole screen.
+ * Whole-screen UI controller.
  *
- * <p>This class is the only layer that mutates view state after construction: text contents, button
- * enabled state, dropdown contents, slider labels and preview geometry. It translates user actions
- * into backend calls and translates backend state snapshots into visible UI state.</p>
+ * <p>This is the only layer that changes view state after MainScreenView builds the widgets. It
+ * translates user actions into backend calls and renders backend snapshots into text, buttons,
+ * dropdowns, slider labels and preview geometry.</p>
  */
 public final class MainUiController implements CameraHardwareBackend.Listener {
     public static final int REQUEST_CAMERA_PERMISSION_FOR_UVC = 1001;
@@ -46,7 +43,7 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
     private final MainScreenView view;
     private final CameraHardwareBackend cameraBackend;
     private final VideoAlignmentBackend videoBackend;
-    private final PolarisAlignmentBackend polarisBackend;
+    private final PolarisBackend polarisBackend;
     private final Handler liveClockHandler = new Handler(Looper.getMainLooper());
     private final StringBuilder appDebugLog = new StringBuilder();
 
@@ -54,6 +51,7 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
     private final List<String> typeOptions = new ArrayList<>();
     private final List<String> resolutionOptions = new ArrayList<>();
     private final List<Integer> fpsOptions = new ArrayList<>();
+
     private CameraHardwareBackend.StreamMode selectedStreamMode;
     private CameraHardwareBackend.StreamMode activeStreamMode;
     private boolean bindingCameraControls;
@@ -64,7 +62,7 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
     private final Runnable liveClockRunnable = new Runnable() {
         @Override public void run() {
             if (view.liveTimeCheckBox.isChecked()) {
-                view.dateTimeEditText.setText(UiFormatting.formatLocalDateTime(new Date()));
+                view.dateTimeEditText.setText(PolarisBackend.formatLocalDateTime(new Date()));
                 calculateAndRenderAlignment();
             }
             liveClockHandler.postDelayed(this, 1000L);
@@ -72,7 +70,7 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
     };
 
     public MainUiController(Activity activity, MainScreenView view, CameraHardwareBackend cameraBackend,
-                            VideoAlignmentBackend videoBackend, PolarisAlignmentBackend polarisBackend) {
+                            VideoAlignmentBackend videoBackend, PolarisBackend polarisBackend) {
         this.activity = activity;
         this.view = view;
         this.cameraBackend = cameraBackend;
@@ -113,37 +111,21 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
     @Override public void onCameraCapabilitiesChanged(CameraHardwareBackend.Capabilities capabilities) { renderCameraCapabilities(capabilities); }
 
     private void wireCameraPanel() {
-        view.refreshUsbButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { requestCameraPermissionThenOpenUvc(); }
-        });
-        view.streamButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                if (activeStreamMode != null) cameraBackend.stopStream();
-                else cameraBackend.startSelectedStream();
-            }
-        });
+        view.refreshUsbButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { requestCameraPermissionThenOpenUvc(); } });
+        view.streamButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { if (activeStreamMode != null) cameraBackend.stopStream(); else cameraBackend.startSelectedStream(); } });
         view.streamTypeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View v, int position, long id) {
-                if (bindingCameraControls || position < 0 || position >= typeOptions.size()) return;
-                rebuildResolutionSpinner(typeOptions.get(position));
-                selectStreamModeFromDropdowns(true);
-            }
+            @Override public void onItemSelected(AdapterView<?> parent, View v, int position, long id) { if (!bindingCameraControls && position >= 0 && position < typeOptions.size()) { rebuildResolutionSpinner(typeOptions.get(position)); selectStreamModeFromDropdowns(true); } }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });
         view.resolutionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View v, int position, long id) {
-                if (bindingCameraControls || position < 0 || position >= resolutionOptions.size()) return;
-                rebuildFpsSpinner(currentTypeLabel(), resolutionOptions.get(position), selectedStreamMode == null ? -1 : selectedStreamMode.fps);
-                selectStreamModeFromDropdowns(true);
-            }
+            @Override public void onItemSelected(AdapterView<?> parent, View v, int position, long id) { if (!bindingCameraControls && position >= 0 && position < resolutionOptions.size()) { rebuildFpsSpinner(currentTypeLabel(), resolutionOptions.get(position), selectedStreamMode == null ? -1 : selectedStreamMode.fps); selectStreamModeFromDropdowns(true); } }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });
         view.fpsSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View v, int position, long id) {
-                if (!bindingCameraControls) selectStreamModeFromDropdowns(true);
-            }
+            @Override public void onItemSelected(AdapterView<?> parent, View v, int position, long id) { if (!bindingCameraControls) selectStreamModeFromDropdowns(true); }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });
+
         SeekBar.OnSeekBarChangeListener sliderListener = new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) { if (fromUser && !bindingCameraControls) updateCameraSliderLabels(); }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
@@ -153,14 +135,10 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
         view.contrastSlider.seekBar.setOnSeekBarChangeListener(sliderListener);
         view.gainSlider.seekBar.setOnSeekBarChangeListener(sliderListener);
         view.exposureSlider.seekBar.setOnSeekBarChangeListener(sliderListener);
-        view.brightnessSlider.minusButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { stepFineSlider(view.brightnessSlider, -1); } });
-        view.brightnessSlider.plusButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { stepFineSlider(view.brightnessSlider, 1); } });
-        view.contrastSlider.minusButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { stepFineSlider(view.contrastSlider, -1); } });
-        view.contrastSlider.plusButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { stepFineSlider(view.contrastSlider, 1); } });
-        view.gainSlider.minusButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { stepFineSlider(view.gainSlider, -1); } });
-        view.gainSlider.plusButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { stepFineSlider(view.gainSlider, 1); } });
-        view.exposureSlider.minusButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { stepFineSlider(view.exposureSlider, -1); } });
-        view.exposureSlider.plusButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { stepFineSlider(view.exposureSlider, 1); } });
+        wireFineSliderButtons(view.brightnessSlider);
+        wireFineSliderButtons(view.contrastSlider);
+        wireFineSliderButtons(view.gainSlider);
+        wireFineSliderButtons(view.exposureSlider);
         view.autoExposureCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
                 if (bindingCameraControls) return;
@@ -170,12 +148,14 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
         });
     }
 
+    private void wireFineSliderButtons(final MainScreenView.FineSlider slider) {
+        slider.minusButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { stepFineSlider(slider, -1); } });
+        slider.plusButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { stepFineSlider(slider, 1); } });
+    }
+
     private void wireAlignmentPanel() {
         view.videoFitSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View v, int position, long id) {
-                overlayState.fitMode = videoBackend.sanitizeFitMode(String.valueOf(parent.getItemAtPosition(position)));
-                applyOverlayState(true);
-            }
+            @Override public void onItemSelected(AdapterView<?> parent, View v, int position, long id) { overlayState.fitMode = videoBackend.sanitizeFitMode(String.valueOf(parent.getItemAtPosition(position))); applyOverlayState(true); }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });
         view.mirrorVideoCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() { @Override public void onCheckedChanged(CompoundButton b, boolean c) { overlayState.mirrorVideo = c; applyOverlayState(true); } });
@@ -196,7 +176,7 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
     }
 
     private void wirePolarisPanel() {
-        view.nowButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { view.liveTimeCheckBox.setChecked(false); view.dateTimeEditText.setText(UiFormatting.formatLocalDateTime(new Date())); calculateAndRenderAlignment(); } });
+        view.nowButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { view.liveTimeCheckBox.setChecked(false); view.dateTimeEditText.setText(PolarisBackend.formatLocalDateTime(new Date())); calculateAndRenderAlignment(); } });
         view.useLocationButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { requestLocationOrFill(); } });
         view.calculateButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { calculateAndRenderAlignment(); } });
         AdapterView.OnItemSelectedListener recalculatingSpinner = new AdapterView.OnItemSelectedListener() {
@@ -225,7 +205,7 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
     private void wireDebugPanel() { view.saveLogButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { cameraBackend.saveDebugLogToDownloads(); } }); }
 
     private void setInitialInputValues() {
-        view.dateTimeEditText.setText(UiFormatting.formatLocalDateTime(new Date()));
+        view.dateTimeEditText.setText(PolarisBackend.formatLocalDateTime(new Date()));
         view.latitudeEditText.setText("52.520008");
         view.longitudeEditText.setText("13.404954");
         view.rightAscensionHoursEditText.setText("0");
@@ -243,11 +223,7 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
     private void renderCameraCapabilities(CameraHardwareBackend.Capabilities capabilities) {
         bindingCameraControls = true;
         activeStreamMode = capabilities.previewRunning ? capabilities.activeStreamMode : null;
-        if (!sameModeList(streamModes, capabilities.streamModes)) {
-            streamModes.clear();
-            streamModes.addAll(capabilities.streamModes);
-            rebuildTypeSpinner();
-        }
+        if (!sameModeList(streamModes, capabilities.streamModes)) { streamModes.clear(); streamModes.addAll(capabilities.streamModes); rebuildTypeSpinner(); }
         CameraHardwareBackend.StreamMode reported = capabilities.selectedStreamMode != null ? capabilities.selectedStreamMode : capabilities.activeStreamMode;
         if (capabilities.previewRunning) selectedStreamMode = capabilities.activeStreamMode;
         else if (!userSelectedStreamMode && !streamModes.isEmpty()) selectedStreamMode = chooseDefaultMode();
@@ -262,7 +238,6 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
         UiStyle.applyPrimaryButtonState(activity, view.refreshUsbButton, !capabilities.previewRunning);
         view.streamButton.setText(capabilities.previewRunning ? "Stop stream" : "Start stream");
         UiStyle.applyPrimaryButtonState(activity, view.streamButton, capabilities.previewRunning || (canSelect && selectedModeFromSpinners() != null));
-
         view.brightnessSlider.setEnabled(capabilities.cameraOpen && capabilities.brightnessSupported);
         view.contrastSlider.setEnabled(capabilities.cameraOpen && capabilities.contrastSupported);
         view.gainSlider.setEnabled(capabilities.cameraOpen && capabilities.gainSupported);
@@ -314,27 +289,8 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
 
     private void selectCurrentModeInSpinners() { if (selectedStreamMode != null) rebuildTypeSpinner(); }
     private String currentTypeLabel() { int i = view.streamTypeSpinner.getSelectedItemPosition(); return i >= 0 && i < typeOptions.size() ? typeOptions.get(i) : null; }
-
-    private void selectStreamModeFromDropdowns(boolean fromUser) {
-        CameraHardwareBackend.StreamMode mode = selectedModeFromSpinners();
-        if (mode != null && !sameMode(mode, selectedStreamMode)) {
-            selectedStreamMode = mode;
-            if (fromUser) userSelectedStreamMode = true;
-            cameraBackend.selectStreamMode(mode);
-        }
-    }
-
-    private CameraHardwareBackend.StreamMode selectedModeFromSpinners() {
-        String type = currentTypeLabel();
-        int resolutionIndex = view.resolutionSpinner.getSelectedItemPosition();
-        int fpsIndex = view.fpsSpinner.getSelectedItemPosition();
-        if (type == null || resolutionIndex < 0 || resolutionIndex >= resolutionOptions.size() || fpsIndex < 0 || fpsIndex >= fpsOptions.size()) return null;
-        String resolution = resolutionOptions.get(resolutionIndex);
-        int fps = fpsOptions.get(fpsIndex);
-        for (CameraHardwareBackend.StreamMode mode : streamModes) if (type.equals(mode.formatLabel()) && resolution.equals(mode.resolutionLabel()) && mode.fps == fps) return mode;
-        return null;
-    }
-
+    private void selectStreamModeFromDropdowns(boolean fromUser) { CameraHardwareBackend.StreamMode mode = selectedModeFromSpinners(); if (mode != null && !sameMode(mode, selectedStreamMode)) { selectedStreamMode = mode; if (fromUser) userSelectedStreamMode = true; cameraBackend.selectStreamMode(mode); } }
+    private CameraHardwareBackend.StreamMode selectedModeFromSpinners() { String type = currentTypeLabel(); int resolutionIndex = view.resolutionSpinner.getSelectedItemPosition(), fpsIndex = view.fpsSpinner.getSelectedItemPosition(); if (type == null || resolutionIndex < 0 || resolutionIndex >= resolutionOptions.size() || fpsIndex < 0 || fpsIndex >= fpsOptions.size()) return null; String resolution = resolutionOptions.get(resolutionIndex); int fps = fpsOptions.get(fpsIndex); for (CameraHardwareBackend.StreamMode mode : streamModes) if (type.equals(mode.formatLabel()) && resolution.equals(mode.resolutionLabel()) && mode.fps == fps) return mode; return null; }
     private CameraHardwareBackend.StreamMode chooseDefaultMode() { CameraHardwareBackend.StreamMode yuyv = bestMode(true); return yuyv != null ? yuyv : bestMode(false); }
     private CameraHardwareBackend.StreamMode bestMode(boolean yuyvOnly) { CameraHardwareBackend.StreamMode best = null; for (CameraHardwareBackend.StreamMode mode : streamModes) { if (yuyvOnly && !mode.formatLabel().contains("YUYV")) continue; if (best == null || rank(mode) > rank(best)) best = mode; } return best; }
     private long rank(CameraHardwareBackend.StreamMode mode) { return (long) mode.width * mode.height * 10000L + mode.fps; }
@@ -401,16 +357,13 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
         float sourceAspect = activeStreamMode != null ? activeStreamMode.width / (float) activeStreamMode.height : 4.0f / 3.0f;
         int containerWidth = view.previewMirrorLayer.getWidth();
         int containerHeight = view.previewMirrorLayer.getHeight();
-        int textureWidth = containerWidth;
-        int textureHeight = containerHeight;
+        int textureWidth = containerWidth, textureHeight = containerHeight;
         if (!VideoAlignmentBackend.FIT_STRETCH.equals(overlayState.fitMode)) {
             boolean containerWide = containerWidth / (float) containerHeight > sourceAspect;
             if (VideoAlignmentBackend.FIT_CONTAIN.equals(overlayState.fitMode)) {
-                if (containerWide) { textureHeight = containerHeight; textureWidth = Math.round(textureHeight * sourceAspect); }
-                else { textureWidth = containerWidth; textureHeight = Math.round(textureWidth / sourceAspect); }
+                if (containerWide) { textureHeight = containerHeight; textureWidth = Math.round(textureHeight * sourceAspect); } else { textureWidth = containerWidth; textureHeight = Math.round(textureWidth / sourceAspect); }
             } else {
-                if (containerWide) { textureWidth = containerWidth; textureHeight = Math.round(textureWidth / sourceAspect); }
-                else { textureHeight = containerHeight; textureWidth = Math.round(textureHeight * sourceAspect); }
+                if (containerWide) { textureWidth = containerWidth; textureHeight = Math.round(textureWidth / sourceAspect); } else { textureHeight = containerHeight; textureWidth = Math.round(textureHeight * sourceAspect); }
             }
         }
         FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) view.previewTextureView.getLayoutParams();
@@ -441,9 +394,9 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
     private void calculateAndRenderAlignment() {
         try {
             clampOffsetDayToMonth();
-            PolarisAlignmentBackend.Request request = readPolarisRequest();
-            AlignmentInput input = polarisBackend.toInput(request);
-            AlignmentResult result = polarisBackend.calculate(request);
+            PolarisBackend.Request request = readPolarisRequest();
+            PolarisBackend.AlignmentInput input = polarisBackend.toInput(request);
+            PolarisBackend.AlignmentResult result = polarisBackend.calculate(request);
             view.reticleOverlayView.setAlignmentResult(result);
             view.readoutText.setText(polarisBackend.formatReadout(result, input));
             if (!result.warningText.isEmpty()) appendDebugLog(result.warningText);
@@ -453,8 +406,8 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
         }
     }
 
-    private PolarisAlignmentBackend.Request readPolarisRequest() {
-        PolarisAlignmentBackend.Request request = new PolarisAlignmentBackend.Request();
+    private PolarisBackend.Request readPolarisRequest() {
+        PolarisBackend.Request request = new PolarisBackend.Request();
         request.localDateTimeText = view.dateTimeEditText.getText().toString();
         request.latitudeText = view.latitudeEditText.getText().toString();
         request.longitudeText = view.longitudeEditText.getText().toString();
@@ -464,7 +417,7 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
         request.offsetMonth = view.offsetMonthSpinner.getSelectedItemPosition() + 1;
         request.offsetDayText = view.offsetDayEditText.getText().toString();
         request.lockZeroHourAngle = view.lockZeroHourAngleCheckBox.isChecked();
-        request.refractionMode = (RefractionMode) view.refractionSpinner.getSelectedItem();
+        request.refractionMode = (PolarisBackend.RefractionMode) view.refractionSpinner.getSelectedItem();
         request.pressureText = view.pressureEditText.getText().toString();
         request.temperatureText = view.temperatureEditText.getText().toString();
         request.elevationText = view.elevationEditText.getText().toString();
@@ -472,7 +425,7 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
     }
 
     private void clampOffsetDayToMonth() { int month = view.offsetMonthSpinner.getSelectedItemPosition() + 1; int clamped = polarisBackend.clampOffsetDay(month, view.offsetDayEditText.getText().toString()); if (clamped > 0 && !String.valueOf(clamped).equals(view.offsetDayEditText.getText().toString().trim())) { view.offsetDayEditText.setText(String.valueOf(clamped)); view.offsetDayEditText.setSelection(view.offsetDayEditText.getText().length()); } }
-    private void updateAtmosphereFieldState() { RefractionMode mode = (RefractionMode) view.refractionSpinner.getSelectedItem(); view.pressureEditText.setEnabled(mode == RefractionMode.SCALED_PRESSURE_TEMPERATURE); view.temperatureEditText.setEnabled(mode == RefractionMode.SCALED_PRESSURE_TEMPERATURE || mode == RefractionMode.ALTITUDE_PRESSURE_TEMPERATURE); view.elevationEditText.setEnabled(mode == RefractionMode.ALTITUDE_PRESSURE_TEMPERATURE); }
+    private void updateAtmosphereFieldState() { PolarisBackend.RefractionMode mode = (PolarisBackend.RefractionMode) view.refractionSpinner.getSelectedItem(); view.pressureEditText.setEnabled(mode == PolarisBackend.RefractionMode.SCALED_PRESSURE_TEMPERATURE); view.temperatureEditText.setEnabled(mode == PolarisBackend.RefractionMode.SCALED_PRESSURE_TEMPERATURE || mode == PolarisBackend.RefractionMode.ALTITUDE_PRESSURE_TEMPERATURE); view.elevationEditText.setEnabled(mode == PolarisBackend.RefractionMode.ALTITUDE_PRESSURE_TEMPERATURE); }
 
     private void requestLocationOrFill() {
         if (activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && activity.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
@@ -498,7 +451,7 @@ public final class MainUiController implements CameraHardwareBackend.Listener {
 
     private void setUvcStatus(String status) { view.uvcStatusText.setText(status == null ? "" : status); appendDebugLog(status == null ? "UVC status cleared." : status); }
     private void appendDebugLog(String message) { if (message == null || message.trim().isEmpty()) return; appDebugLog.append(String.format(Locale.US, "[%tT] %s\n", new Date(), message.trim())); if (appDebugLog.length() > 9000) appDebugLog.delete(0, appDebugLog.length() - 9000); view.debugLogText.setText(appDebugLog.toString().trim()); }
-    private void selectSpinnerText(android.widget.Spinner spinner, String wanted) { for (int i = 0; spinner != null && i < spinner.getCount(); i++) if (wanted.equals(String.valueOf(spinner.getItemAtPosition(i)))) { spinner.setSelection(i); return; } if (spinner != null) spinner.setSelection(0); }
+    private void selectSpinnerText(Spinner spinner, String wanted) { for (int i = 0; spinner != null && i < spinner.getCount(); i++) if (wanted.equals(String.valueOf(spinner.getItemAtPosition(i)))) { spinner.setSelection(i); return; } if (spinner != null) spinner.setSelection(0); }
 
     private abstract static class SimpleTextWatcher implements TextWatcher { @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { } @Override public void onTextChanged(CharSequence s, int start, int before, int count) { } }
 }
