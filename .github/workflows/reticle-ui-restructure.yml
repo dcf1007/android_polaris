@@ -1,0 +1,63 @@
+name: One-time reticle UI restructure
+
+on:
+  push:
+    branches:
+      - refactor/layered-ui-backend
+    paths:
+      - .github/workflows/reticle-ui-restructure.yml
+
+permissions:
+  contents: write
+
+jobs:
+  restructure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out refactor branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/layered-ui-backend
+          fetch-depth: 0
+
+      - name: Move reticle renderer into UI package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          old_dir="app/src/main/java/com/dcf1007/androidpolaris/view/reticle"
+          new_dir="app/src/main/java/com/dcf1007/androidpolaris/ui/reticle"
+          overlay="app/src/main/java/com/dcf1007/androidpolaris/ui/ReticleOverlayView.java"
+
+          test -f "$old_dir/NativeCanvasReticle.java"
+          test -f "$old_dir/NativeReticleGeometry.java"
+          test -f "$overlay"
+
+          mkdir -p "$new_dir"
+          git mv "$old_dir/NativeCanvasReticle.java" "$new_dir/NativeCanvasReticle.java"
+          git mv "$old_dir/NativeReticleGeometry.java" "$new_dir/NativeReticleGeometry.java"
+
+          sed -i 's/package com\.dcf1007\.androidpolaris\.view\.reticle;/package com.dcf1007.androidpolaris.ui.reticle;/' \
+            "$new_dir/NativeCanvasReticle.java" \
+            "$new_dir/NativeReticleGeometry.java"
+
+          sed -i 's/import com\.dcf1007\.androidpolaris\.view\.reticle\.NativeCanvasReticle;/import com.dcf1007.androidpolaris.ui.reticle.NativeCanvasReticle;/' "$overlay"
+          sed -i 's/import com\.dcf1007\.androidpolaris\.view\.reticle\.NativeReticleGeometry;/import com.dcf1007.androidpolaris.ui.reticle.NativeReticleGeometry;/' "$overlay"
+
+          ! grep -R "com\.dcf1007\.androidpolaris\.view\.reticle" app/src/main/java
+          test ! -e "$old_dir/NativeCanvasReticle.java"
+          test ! -e "$old_dir/NativeReticleGeometry.java"
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Commit restructure and remove one-time workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/reticle-ui-restructure.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/dcf1007/androidpolaris
+          git commit -m "Move native reticle renderer into UI package"
+          git push origin HEAD:refactor/layered-ui-backend
