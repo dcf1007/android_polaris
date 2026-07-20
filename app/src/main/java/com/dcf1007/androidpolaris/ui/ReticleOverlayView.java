@@ -8,8 +8,8 @@ import android.util.AttributeSet;
 import android.view.View;
 
 import com.dcf1007.androidpolaris.backend.PolarisBackend;
-import com.dcf1007.androidpolaris.view.reticle.NativeCanvasReticle;
-import com.dcf1007.androidpolaris.view.reticle.NativeReticleGeometry;
+import com.dcf1007.androidpolaris.ui.reticle.NativeCanvasReticle;
+import com.dcf1007.androidpolaris.ui.reticle.NativeReticleGeometry;
 
 /**
  * Native Canvas reticle overlay drawn above the UVC preview.
