@@ -54,7 +54,20 @@ jobs:
           test ! -e "$old_dir/NativeReticleGeometry.java"
 
       - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon
+        id: build
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew :app:assembleDebug --no-daemon 2>&1 | tee reticle-restructure-build.log
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reticle-restructure-build-log
+          path: reticle-restructure-build.log
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Commit restructure and remove one-time workflow
         shell: bash
